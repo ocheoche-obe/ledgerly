@@ -1,11 +1,7 @@
-# {{PROJECT_NAME}} — Project Context for Claude Code
+# Ledgerly — Project Context for Claude Code
 
 > This file is loaded at the start of every Claude Code session. Keep it current
 > as the project evolves. The phase marker at the bottom is especially important.
->
-> TEMPLATE NOTE: keep this file COMPACT. It is session-start context, not documentation.
-> Anything that grows or changes often belongs in the plan/architecture/ADL docs, and
-> this file just points at them. Delete this note once the project is real.
 
 ## How this project is run
 
@@ -17,74 +13,81 @@ See `KICKOFF.md` for the full framework.
 
 ## What this app does
 
-{{ONE_PARAGRAPH: what the app does, for whom, and the core value proposition. Pull this
-straight from the requirements doc's Purpose & Vision once it exists.}}
+Ledgerly is a personal budgeting app for its owner (single user). It ingests bank
+transaction history (CSV import in v1; Plaid live sync deferred), an AI agent categorizes
+every transaction into owner-defined budget categories, and a dashboard shows budget vs.
+actual per category at a glance for each budget cycle (calendar month by default, or a
+two-week payday-aligned cycle). Secondary purpose: an explicit learning vehicle for
+AI/LLM pipelines, AWS serverless, IaC/CI-CD, and full-stack skills.
 
-{{Tenancy / scale posture in one line — e.g. "Single-user MVP, data model designed to be
-multi-tenant-ready." Reference the ADR that decided it.}}
+Single-user MVP, data model designed to be multi-tenant-ready (ADR-006, pending).
+Deployment: AWS, serverless-first (ADR-001).
 
 ## Canonical docs (always trust these first)
 
-- **`docs/{{project-slug}}-architecture.md`** — full architecture document. Authoritative
+- **`docs/ledgerly-architecture.md`** — full architecture document. Authoritative
   source for system design, data model, sequence diagrams, cross-cutting concerns, IaC.
-- **`docs/{{project-slug}}-plan.md`** — implementation plan & roadmap. Authoritative for
+- **`docs/ledgerly-plan.md`** — implementation plan & roadmap. Authoritative for
   slice order, per-slice scope/exit criteria, status, and completion notes.
-- **`docs/{{project-slug}}-requirements.md`** — functional and non-functional requirements.
-- **`docs/{{project-slug}}-adl.md`** — Architectural Decision Records. The "why" behind
+- **`docs/ledgerly-requirements.md`** — functional and non-functional requirements.
+- **`docs/ledgerly-adl.md`** — Architectural Decision Records. The "why" behind
   every significant choice.
-- **`docs/{{project-slug}}-evaluation.md`** — lifecycle stage 6: metrics, retrospectives,
+- **`docs/ledgerly-evaluation.md`** — lifecycle stage 6: metrics, retrospectives,
   and the findings that seed the next cycle.
-- **`docs/{{project-slug}}-glossary.md`** — terms, services, cross-cloud parallels.
-- **`docs/{{project-slug}}-reference.md`** — original scoping notes / brain-dump.
+- **`docs/ledgerly-glossary.md`** — terms, services, cross-cloud parallels.
+- **`docs/ledgerly-reference.md`** — original scoping notes / brain-dump (frozen).
 
 When making implementation decisions, consult the architecture doc first. If something
 seems off or unclear, the ADL captures the reasoning behind it.
 
 ## Architecture summary
 
-{{FILL FROM THE ARCHITECTURE DOC once Phase 1 is done. A compact bullet list of the major
-components and the ADR that anchors each. Example shape below — replace with reality:}}
+_Not designed yet — Phase 1 fills this in. Locked so far:_
 
-- **Frontend:** {{stack}} (ADR-00X), hosted on {{...}}.
-- **API:** {{...}}.
-- **Backend:** {{language/runtime}} (ADR-00X), packaged via {{IaC tool}} (ADR-00X).
-- **Database:** {{...}} (ADR-00X).
-- **Storage / AI / Notifications / etc.:** {{...}}.
-- **Region:** {{region}} (ADR-00X).
+- **Deployment target:** AWS, single-cloud, serverless-first (ADR-001).
+- **Backend language:** Python (interview constraint; to be confirmed as ADR-002).
+- **UI:** responsive web app (no native mobile in v1).
+- **Ingest:** pluggable sources — CSV upload first, Plaid later (requirements FR-2.3).
+- ADR-002…008 (runtime, frontend, IaC, database, tenancy, auth, AI pipeline) are Open —
+  they get decided in the architecture stage.
 
 ## Components / functions
 
-{{List the deployable units (Lambdas, services, containers…) and one line on each purpose.
-Point at the architecture-doc section with the full contracts.}}
+_None yet — filled in during Phase 1/first slices._
 
 ## Repository layout
 
 ```
-{{fill once the repo shape is decided — keep it to the top-level map}}
-docs/                # Architecture, requirements, ADL, glossary
+docs/                # Canonical docs: requirements, architecture, ADL, plan, evaluation, glossary, reference
+.claude/skills/      # /start-slice and /wrap-slice session rituals
 CLAUDE.md            # This file
+KICKOFF.md           # The reusable agentic-engineering framework (leave untouched)
 ```
 
 ## Conventions
 
-{{Language/runtime conventions, handler signatures, shared-code import paths, logging and
-metrics conventions, security invariants (e.g. "user ID comes from the auth token, never
-the request body"). Fill as they solidify — usually end of the first implementation slice.}}
+_To solidify at the end of the first implementation slice. Already binding from
+requirements: user identity comes from the auth token, never the request body (FR-1.3);
+secrets never in code/repo (NFR-4.3); all infra as code (NFR-5.1)._
 
 ## Cost constraints
 
-- **{{$N/month}} effective hard ceiling.** {{one line on why that number}}.
-- Guards in place: {{budget alarm name, billing alarms, log retention, per-resource caps}}.
+- **$10/month effective hard ceiling** (NFR-1.1) — single-user personal app; serverless
+  keeps idle cost near zero. Plaid production would be a deliberate ADR-recorded revision.
+- Guards in place: none yet — a billing alarm below the ceiling is required by the first
+  deployed slice (NFR-1.2).
 
 ## Current build phase
 
-**Phase {{N}} — {{phase name}} ({{status}}). Current slice: {{N}} — {{short name}}.**
+**Phase 1 — Architecture design (not started). Current slice: P1.**
 
-- Last completed: {{slice}} ({{PR link}}).
-- **The roadmap lives in `docs/{{project-slug}}-plan.md`** — slice order, per-slice scope,
+- Last completed: P0 Requirements — approved v1.0 (2026-07-13) after owner review;
+  ADR-001 recorded. Note: budgets are per-cycle (monthly default or two-week anchored),
+  a key data-model input for P1.
+- **The roadmap lives in `docs/ledgerly-plan.md`** — slice order, per-slice scope,
   exit criteria, open decisions, and completion notes. Read the status board + current
   slice section at session start; update it when a slice wraps.
 - Session rituals: `/start-slice` and `/wrap-slice` (project skills in `.claude/skills/`).
 
 Refer to the architecture doc as you implement. If a decision needs to be made that isn't
-covered, capture it as a new ADR in `{{project-slug}}-adl.md` before coding it in.
+covered, capture it as a new ADR in `ledgerly-adl.md` before coding it in.

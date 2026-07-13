@@ -1,11 +1,11 @@
-# {{PROJECT_NAME}} — Architecture Document
+# Ledgerly — Architecture Document
 
 **Version:** 0.1
 **Status:** Drafting
-**Last updated:** {{YYYY-MM-DD}}
+**Last updated:** 2026-07-12
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
-> significant choice recorded here should have a matching ADR in `{{project-slug}}-adl.md`
+> significant choice recorded here should have a matching ADR in `ledgerly-adl.md`
 > that owns the **WHY**. If this doc and the plan doc ever disagree on design, this doc wins.
 > Delete this note when real.
 
@@ -148,4 +148,4 @@ key design works before writing code.}}
 
 | Version | Date | Change |
 |---|---|---|
-| 0.1 | {{YYYY-MM-DD}} | Initial draft |
+| 0.1 | 2026-07-12 | Initial draft |

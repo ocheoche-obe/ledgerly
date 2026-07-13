@@ -1,7 +1,7 @@
-# {{PROJECT_NAME}} — Evaluation & Retrospective
+# Ledgerly — Evaluation & Retrospective
 
 **Status:** Living document — updated at each slice wrap and each release
-**Last updated:** {{YYYY-MM-DD}}
+**Last updated:** 2026-07-12
 
 > Lifecycle stage 6. This is the hinge that turns the cycle: it measures what actually
 > shipped against what we *said* we wanted, and its findings become the inputs to the next
@@ -90,9 +90,9 @@ correction or new ADR)
 The lifecycle is Requirements → Architecture → Implementation → Testing → Deployment →
 **Evaluation → (back to Requirements)**. When a version's retrospective is complete:
 
-1. Promote the accepted findings into `{{project-slug}}-requirements.md` (new/changed FR/NFR)
-   or into new ADRs in `{{project-slug}}-adl.md`.
-2. Re-slice the next version's work in `{{project-slug}}-plan.md`.
+1. Promote the accepted findings into `ledgerly-requirements.md` (new/changed FR/NFR)
+   or into new ADRs in `ledgerly-adl.md`.
+2. Re-slice the next version's work in `ledgerly-plan.md`.
 3. Bump the plan's status board and CLAUDE.md phase marker to the new cycle.
 
 ---
@@ -101,4 +101,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 
 | Date | Change |
 |---|---|
-| {{YYYY-MM-DD}} | Initial evaluation scaffold |
+| 2026-07-12 | Initial evaluation scaffold |
