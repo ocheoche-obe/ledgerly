@@ -131,7 +131,7 @@ project-specific goes. Step 1 below replaces those.
 
 **1. Copy the folder into your new repo.**
 ```bash
-cp -R ~/Documents/GitHub/aws-project-starter ~/Documents/GitHub/<your-new-repo>
+cp -R ~/Documents/GitHub/project-starter ~/Documents/GitHub/<your-new-repo>
 cd ~/Documents/GitHub/<your-new-repo>
 git init
 ```
