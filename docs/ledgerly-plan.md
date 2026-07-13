@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 0.1
+**Version:** 0.4
 **Created:** 2026-07-12
 
 ---
@@ -56,12 +56,15 @@ whose findings loop back into new requirements, ADRs, or slices here.
 3. **Docs current before done.** `/wrap-slice` blocks on this doc, the ADL, and (when
    reality contradicted it) the architecture doc being updated.
 4. **Cost ceiling.** $10/month (NFR-1.1). Slices that add a new paid service start with a
-   budget-posture check.
+   budget-posture check. The billing alarm ships in Slice 1, before anything else.
 5. **Learning vehicle.** When live cloud behavior contradicts the docs, surface the
    contradiction and correct the doc with reasoning — never silently code around it.
 6. **Close the loop.** Every slice ends with a short evaluation beat; every release ends with
    a retrospective in `ledgerly-evaluation.md`. Findings route to a requirement, an
    ADR, a slice, or the parking lot — never nowhere.
+7. **Diagram as code.** Architecture diagrams are generated from
+   `docs/render_architecture.py` — any slice that changes the system shape re-renders the
+   diagram in the same commit.
 
 ---
 
@@ -70,14 +73,20 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | Slice | Name | Reqs covered | Status | PR |
 |---|---|---|---|---|
 | P0 | Requirements | — | ✅ approved v1.0 (2026-07-13) | — |
-| P1 | Architecture design + foundational ADRs | — | ⬜ next | — |
-| 1+ | Implementation slices | — | ⬜ sliced during P1, recorded here | — |
+| P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
+| 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ⬜ next | — |
+| 2 | CI/CD pipeline + test scaffolding | NFR-5.1/5.2/5.3 | ⬜ | — |
+| 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ⬜ | — |
+| 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
+| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
+| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
+| 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
+| 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
 
-> Slice 1 will be the thinnest possible thing that proves the whole stack works
-> end-to-end (auth → API → compute → data, deployed), per the kit's rule. The working
-> candidate from the interview: **CSV upload → stored transactions → visible in a deployed
-> UI** — with AI categorization as the immediate follow-on slice. Final slicing happens
-> after the architecture stage.
+> Slicing rationale: Slice 1 is the **thinnest end-to-end proof** that the whole stack
+> works deployed (the kit's rule) — thinner than the interview candidate ("CSV upload →
+> visible in UI"), which is real functionality layered on infra that has to exist anyway.
+> That candidate lands as Slice 4, and by then it rides on a proven skeleton and pipeline.
 
 ---
 
@@ -91,20 +100,164 @@ alongside the monthly default (FR-4.2), and investment/savings *contributions* c
 budgetable while investment tracking stays out of scope (§3). ADR-001 (AWS,
 serverless-first) recorded during setup.
 
-### Phase 1 — Architecture design
-_Not started — next up. Inputs: requirements v1.0, ADR-001; outputs: architecture doc
-(incl. §0.1 WHERE), ADR-002…008 resolved, implementation slices written into this doc.
-Note for the data model: budgets are per-cycle (monthly or two-week anchored), not
-per-calendar-month — design keys/queries accordingly._
+### Phase 1 — Architecture design ✅
+Completed 2026-07-13. Architecture approved (owner review; one amendment — rendered
+AWS-style diagram added as diagrams-as-code, `docs/render_architecture.py`). Outputs:
+`ledgerly-architecture.md` v1.1 (WHERE §0.1, system design, access-pattern-first data
+model with cycle-keyed budgets, sequence diagrams, cross-cutting concerns, CDK/IaC
+structure), ADR-002…009 all Accepted (architecture committed at `a01f58a`), and the
+slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
+`/start-slice` in a fresh session.
 
 ---
 
 ## Implementation slices
 
-_To be written at the end of Phase 1, when the architecture is settled enough to slice
-honestly. Each slice will follow the kit's shape: goal, key refs, scope in/out, ⚠ open
-decisions, exit criteria (implemented / tested / deployed / docs / evaluation beat),
-completion notes._
+> Slices are sized for one or two evening/weekend sessions (business constraint §6).
+> Key refs for every slice: architecture doc §2 (data model), §3 (sequences), §5 (IaC).
+
+### Slice 1 — Walking skeleton ⬜ (next)
+
+- **Goal:** prove the entire stack works end-to-end, deployed: the owner logs into the
+  deployed SPA, it makes an authenticated API call, and data comes back from DynamoDB.
+- **Scope in:** CDK app + `dev` stack (constructs: Auth, Data, Api, Web, Ops); Cognito
+  user pool + one admin-created user; HTTP API + JWT authorizer; one API Lambda
+  (`GET /settings` — creates/returns the PROFILE item, defaulting to monthly cadence);
+  DynamoDB table + GSIs (full key schema from day one — it's cheap and avoids migration);
+  minimal React SPA (login via hosted UI/PKCE, call `/settings`, render the result);
+  S3+CloudFront hosting; **billing alarm ($5 actual / $8 forecast)**; repo layout per
+  architecture §5.2.
+- **Scope out:** CI/CD (Slice 2 — manual `cdk deploy` is acceptable *only* this slice);
+  any real feature UI; custom domain.
+- **⚠ Open decisions:** none — all covered by ADR-001…009.
+- **Exit criteria:** ☐ owner logs in on the deployed dev URL and sees the settings
+  round-trip ☐ unauthenticated API request → 401 ☐ billing alarm confirmed active in
+  console ☐ `pytest` runs (even if few tests) ☐ docs current (CLAUDE.md conventions +
+  components sections seeded).
+- **Completion notes:** _—_
+
+### Slice 2 — CI/CD pipeline + test scaffolding ⬜
+
+- **Goal:** no more workstation deploys — merge to `main` ships `dev` automatically;
+  `prod` exists and promotes on manual approval (NFR-5.2).
+- **Scope in:** GitHub Actions with OIDC federation into a deploy role (no long-lived AWS
+  keys); workflow: backend `pytest` + frontend build/test → `cdk diff` → deploy `dev`;
+  manually-approved `prod` promotion job; `prod` stack created (deletion + termination
+  protection on); test scaffolding: `pytest` layout for `backend/core` + moto-based repo
+  tests, `vitest` for frontend.
+- **Scope out:** e2e browser tests (revisit when the dashboard exists).
+- **⚠ Open decisions:** none.
+- **Exit criteria:** ☐ push to `main` deploys dev with tests gating ☐ prod promotion job
+  runs and deploys the skeleton ☐ no AWS secrets stored in GitHub ☐ docs current.
+- **Completion notes:** _—_
+
+### Slice 3 — Categories, settings & budget-cycle engine ⬜
+
+- **Goal:** the owner can manage categories and set the budget-cycle cadence; the cycle
+  math that everything downstream keys on exists and is thoroughly unit-tested.
+- **Scope in:** `core/cycles.py` — cycle-ID computation (`M#…`/`B#…`), window resolution,
+  cadence-change-effective-next-cycle semantics (FR-4.2), with exhaustive unit tests
+  (month boundaries, anchor math, cadence transitions); categories CRUD API + UI
+  (create/rename/archive — archive stubs reassignment until Slice 7 wires transactions);
+  starter category set on first run (FR-4.4); settings UI (cadence + anchor date).
+- **Scope out:** budget amounts (Slice 6); transaction reassignment on archive (Slice 7
+  completes FR-4.5).
+- **⚠ Open decisions:** starter category list contents — proposed default brought to
+  owner during the slice (low stakes, fully editable).
+- **Exit criteria:** ☐ categories + settings manageable in deployed app ☐ cycle engine
+  unit tests cover both cadences + transitions ☐ deployed via pipeline ☐ docs current.
+- **Completion notes:** _—_
+
+### Slice 4 — CSV import end-to-end ⬜ ⚠
+
+- **Goal:** the interview's slice-1 candidate, on real rails: upload a bank CSV, see
+  transactions land in the deployed app with an import report.
+- **Scope in:** presigned-upload flow (`POST /imports` → S3 PUT); import Lambda: parse,
+  normalize (date/amount/direction/merchant), file- and row-level idempotency
+  (FILEHASH#/txnId conditional puts), raw record preserved (FR-2.4), import summary with
+  added/duplicate/failed counts (FR-2.5); import status UI (poll `GET /imports/{id}`,
+  NFR-2.2); basic transaction list view (date-range query); source abstraction seam per
+  FR-2.3 (parser behind an interface keyed by bank format).
+- **Scope out:** categorization (Slice 5 — everything lands `Uncategorized` this slice);
+  filters/search (Slice 7).
+- **⚠ Open decisions:** **owner input needed — sample CSV exports from each of the
+  owner's banks** (column layouts, date formats, debit/credit conventions, account
+  identification). Requested at slice start; parsers are built against real samples.
+- **Exit criteria:** ☐ re-uploading the same file adds zero duplicates (FR-2.2 verified
+  against the deployed app) ☐ overlapping exports dedupe ☐ malformed rows counted, not
+  fatal ☐ import report visible ☐ docs current.
+- **Completion notes:** _—_
+
+### Slice 5 — AI categorization pipeline + eval harness ⬜ ⚠
+
+- **Goal:** imported transactions get categorized automatically with confidence, async,
+  and accuracy is *measured*, not vibes (NFR-5.3).
+- **Scope in:** SQS queue + DLQ + alarm (ADR-009); categorizer Lambda: merchant-rule
+  lookup → Bedrock (Claude Opus 4.8) with structured output, batched (architecture
+  §3.2); confidence threshold → `needsReview` flag + GSI2; failure path → Uncategorized,
+  never lost (FR-3.5); Bedrock IAM grant scoped to the one model; **eval harness**: a
+  labeled sample set of the owner's real (anonymized-enough) transactions + a script that
+  reports accuracy per run — the gate for prompt/model changes and the measurement for
+  success criterion 2; budget-posture check (first paid-per-use AI service — expected
+  <$1/mo, ceiling unaffected).
+- **Scope out:** review-queue UI (Slice 7); merchant-rule *creation* (Slice 7 — this
+  slice only reads rules, so the table starts empty and everything goes to the LLM).
+- **⚠ Open decisions:** confidence threshold default (proposal: 0.8, tuned against the
+  eval set during the slice); prompt shape iterations recorded in the eval harness, not
+  ad-hoc.
+- **Exit criteria:** ☐ a real import ends fully categorized within ~2 min (NFR-2.2) ☐
+  DLQ path verified (forced failure lands Uncategorized + alarm) ☐ eval harness reports
+  a baseline accuracy number ☐ docs current (+ ADL note if threshold ≠ 0.8).
+- **Completion notes:** _—_
+
+### Slice 6 — Budgets & at-a-glance dashboard ⬜
+
+- **Goal:** the product's reason to exist: budget vs. actual per category for any cycle,
+  in one glance.
+- **Scope in:** budget amounts per category per cycle (`PUT /cycles/{id}/budgets/{cat}`,
+  FR-4.3) + editing UI; cycle summary endpoint (budgets + windowed transactions,
+  aggregated — architecture §3.3); dashboard screen: per-category budget vs. actual,
+  totals (in/out/remaining), drill-down to transactions (GSI1), past-cycle picker
+  (FR-5.3); responsive layout verified on a phone (FR-5.4); NFR-2.1 (<2s) and NFR-7.1
+  (no-scroll desktop glance) checked against the deployed app.
+- **Scope out:** trends across cycles (parking lot).
+- **⚠ Open decisions:** dashboard visual design — a proposed layout brought to owner
+  early in the slice.
+- **Exit criteria:** ☐ owner answers "where is my money going, am I over anywhere?" from
+  one deployed screen ☐ works on phone browser ☐ past cycles viewable ☐ docs current.
+- **Completion notes:** _—_
+
+### Slice 7 — Review queue, corrections & transaction management ⬜
+
+- **Goal:** close the human-in-the-loop learning circle: triage low-confidence items,
+  correct anything, and have corrections teach the system (FR-3.4).
+- **Scope in:** review queue UI (GSI2) with quick confirm-or-correct (FR-6.3);
+  re-categorize from list + drill-down (FR-6.2) with optimistic UI (NFR-2.3); correction
+  writes merchant rule (architecture §3.4) — categorizer starts getting rule hits;
+  recent corrections as few-shot examples in the prompt; transaction filters/search
+  (date, category, amount, text — FR-6.1); category archive completes FR-4.5
+  (reassignment choice wired to real transactions).
+- **Scope out:** nothing carried forward — this completes the FR-3/FR-6 surface.
+- **⚠ Open decisions:** none expected.
+- **Exit criteria:** ☐ correcting a transaction visibly improves the next import (rule
+  hit) ☐ review queue triage feels fast (NFR-2.3) ☐ filters work ☐ archive requires
+  reassignment choice ☐ docs current.
+- **Completion notes:** _—_
+
+### Slice 8 — v1 hardening + first real cycle ⬜
+
+- **Goal:** cut over to real use and start the clock on the success criteria.
+- **Scope in:** prod promotion of the full app; owner runs the first **real check-in
+  ritual** on prod (import → triage → dashboard) with actual bank data; measure: ritual
+  time (NFR-7.2 <15 min), categorization accuracy (criterion 2 baseline), billing
+  actuals vs. ceiling (criterion 4); fix the sharp edges that real use surfaces; seed
+  `ledgerly-evaluation.md` with the v1 measurement plan + first data points.
+- **Scope out:** anything that looks like a new feature → parking lot.
+- **⚠ Open decisions:** whether a custom domain is wanted for daily use.
+- **Exit criteria:** ☐ owner completes a real cycle ritual on prod ☐ evaluation doc
+  live with first metrics ☐ retrospective beat done ☐ docs + CLAUDE.md phase marker
+  flipped to "v1 in real use — evaluation running".
+- **Completion notes:** _—_
 
 ---
 
@@ -115,9 +268,10 @@ completion notes._
 
 - **Plaid live bank connection** — top deferred item; sandbox first. Trigger: v1 monthly
   ritual proven (success criterion 1) and owner appetite to revise the cost ceiling
-  (ADR required per NFR-1.1).
+  (ADR required per NFR-1.1). Architecture seam ready: second ingest source behind FR-2.3.
 - **Month-over-month trends** — cheapest promotion; mostly queries + dashboard work once
-  months of data exist. Trigger: 2–3 months of real data in the system.
+  months of data exist. Trigger: 2–3 months of real data in the system. Note: first new
+  event subscriber → introduces EventBridge per ADR-009's recorded trigger.
 - **Recurring/subscription detection** — needs several months of data to be meaningful.
 - **Alerts/notifications** — pulls in email/push infrastructure; do after budgets feel
   trustworthy.
@@ -133,3 +287,5 @@ completion notes._
 |---|---|---|
 | 0.1 | 2026-07-12 | Initial roadmap scaffold: P0/P1 phases, slice-1 candidate, parking lot from interview |
 | 0.2 | 2026-07-13 | P0 complete: requirements approved v1.0 (two amendments); P1 marked next |
+| 0.3 | 2026-07-13 | P1 architecture approved (v1.1, ADR-002…009); v1 sliced into slices 1–8 (walking skeleton first); diagram-as-code principle added |
+| 0.4 | 2026-07-13 | Slice roadmap owner-approved; P1 marked complete. Diagram-as-code skill removed from the plan — it's a portable side deliverable for the project-starter kit, not Ledgerly scope |
