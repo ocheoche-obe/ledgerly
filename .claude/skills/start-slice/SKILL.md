@@ -7,10 +7,6 @@ description: Session-start ritual for beginning a new project slice — reconcil
 
 Run these steps in order. Do not write code until step 6 is confirmed.
 
-> SETUP NOTE: replace the `{{...}}` placeholders below (branch prefix, cloud profile,
-> account/region, cost tool) once the project's stack and repo conventions are set — usually
-> at the end of the first implementation slice. Delete this note afterwards.
-
 ## 1. Reconcile git
 
 ```bash
@@ -24,34 +20,46 @@ git status -sb
 
 ## 2. Reload canonical context
 
-- Read **`docs/{{project-slug}}-plan.md`**: the status board (where are we) and the current
+- Read **`docs/ledgerly-plan.md`**: the status board (where are we) and the current
   slice's detail section (goal, scope in/out, ⚠ decisions, exit criteria). If the board
   disagrees with git history, the CLAUDE.md phase marker, or the deployed state, flag that
   before anything else.
 - Read the ADRs and architecture-doc sections the slice's "Key refs" line names.
 - Check memory for gotchas that apply.
 
-## 3. Verify cloud access
+## 3. Verify cloud access — hard account assertion
+
+Skip only if the slice makes no cloud calls at all. Otherwise this is a **hard gate**: no
+`cdk`, `aws`, or any account-mutating command runs until it passes. Run the shared guard
+(the same script the SessionStart hook uses — one source of truth):
 
 ```bash
-{{e.g. AWS_PROFILE=<project>-dev aws sts get-caller-identity}}
+.claude/check-aws-profile.sh
 ```
 
-Expected account: `{{account id}}`, region `{{region}}`. If the auth token is expired, ask
-the user to re-authenticate — do not attempt to log in for them. Skip this step if the slice
-involves no cloud calls yet.
+- **Expected: `✓ OK` → account `816020558700`** (Ledgerly, ADR-010), region `us-east-1`,
+  profile `ledgerly-dev`. Ledgerly always uses `ledgerly-dev` — never a bare/default
+  profile, never `careervault-dev` (`768396678224`, a different project on the same SSO).
+- **`✗ MISMATCH` → STOP.** Do not run another cloud command; you are pointed at the wrong
+  account. Surface it to the user. (Deploys are also pinned in `infra/app.py`, so a
+  wrong-account `cdk deploy` fails fast — but never rely on that alone.)
+- **`⚠ not authenticated` →** ask the user to run `aws sso login --profile ledgerly-dev`
+  — never log in for them — then re-run the guard.
+- Every AWS/CDK command this session carries `--profile ledgerly-dev` (or
+  `AWS_PROFILE=ledgerly-dev`); never a default profile.
 
 ## 4. Confirm cost posture
 
 Only if paid cloud work is planned this session: sanity-check month-to-date spend is within
-the {{$N}} ceiling. One line in the summary is enough.
+the **$10/month** ceiling (NFR-1.1). Because Ledgerly has its own account (ADR-010), the
+account's month-to-date bill *is* Ledgerly's spend. One line in the summary is enough.
 
 ## 5. Cut the branch
 
 From up-to-date `main`:
 
 ```bash
-git checkout -b {{branch-prefix e.g. feat/phase2-sliceN-short-kebab-name}}
+git checkout -b feat/sliceN-short-kebab-name   # e.g. feat/slice1-walking-skeleton
 ```
 
 ## 6. Confirm scope and exit criteria — then stop
@@ -62,7 +70,7 @@ writing code:
 - Present them to the user, adjusted for anything learned since the roadmap was written. If
   scope changed materially, edit the plan doc's slice section so it stays authoritative.
 - Resolve the slice's ⚠ decisions with the user. Per project convention, each decision not
-  covered by the architecture doc becomes an ADR in `docs/{{project-slug}}-adl.md` *before*
+  covered by the architecture doc becomes an ADR in `docs/ledgerly-adl.md` *before*
   the code that implements it.
 - Flip the slice's status to 🔨 on the plan doc's status board.
 
