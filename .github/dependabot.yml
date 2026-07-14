@@ -1,0 +1,30 @@
+version: 2
+
+# One entry per manifest directory for every ecosystem actually present in this repo:
+#   pip  → infra/requirements.txt  and  backend/ (pyproject.toml + requirements-dev.txt)
+#   npm  → frontend/ (package.json + package-lock.json)
+#   github-actions → the workflows in .github/workflows/
+updates:
+  - package-ecosystem: pip
+    directory: /infra
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
