@@ -74,7 +74,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 |---|---|---|---|---|
 | P0 | Requirements | — | ✅ approved v1.0 (2026-07-13) | — |
 | P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
-| 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | _PR pending_ |
+| 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ⬜ | — |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ⬜ | — |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
