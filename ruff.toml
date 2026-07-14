@@ -1,0 +1,6 @@
+# Repo-wide Python lint config for backend/ and infra/ (the two Python roots).
+# Ruff is the project's Python linter; CI runs `ruff check backend infra`. We keep ruff's
+# default rule set (pyflakes + a conservative pycodestyle subset) so the gate stays high-
+# signal rather than style-nagging. Introduced in Slice 1 — no linter existed before.
+target-version = "py313"
+line-length = 100
