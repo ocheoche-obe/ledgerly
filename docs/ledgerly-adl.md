@@ -1,7 +1,7 @@
 # Ledgerly — Architectural Decisions Log (ADL)
 
 **Status:** Living document — updated as decisions are made
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-14
 
 ---
 
@@ -54,6 +54,7 @@ Superseded.
 | ADR-007 | Authentication: Amazon Cognito User Pool         | Accepted |
 | ADR-008 | AI categorization: Amazon Bedrock + Claude Opus 4.8, swappable interface | Accepted |
 | ADR-009 | Async backbone: SQS queue + DLQ for categorization | Accepted |
+| ADR-010 | AWS account topology: dedicated account per project | Accepted |
 
 ---
 
@@ -389,6 +390,62 @@ so nothing is lost).
 - Import returns fast regardless of LLM latency; retries and failure isolation are
   built-in; ≈ $0 at this volume.
 - The queue is the seam where EventBridge slots in later without touching the categorizer.
+
+---
+
+## ADR-010: AWS account topology — a dedicated account for Ledgerly
+
+**Status:** Accepted (2026-07-13, Slice 1 setup)
+
+### Context
+
+The owner already runs a separate project (CareerVault) in AWS account `768396678224`,
+accessed via AWS IAM Identity Center (SSO) with an `AdministratorAccess` permission set.
+Ledgerly needs its own AWS footprint. The architecture doc (§0.1) already specifies
+Ledgerly uses **one AWS account with two CDK stages** (`dev`/`prod`) — but is silent on
+whether that account is *shared with CareerVault* or *dedicated to Ledgerly*. Two forces
+make this worth deciding deliberately:
+
+- **Blast-radius / isolation.** The owner's explicit concern: never accidentally alter the
+  wrong project's resources. A profile only enforces isolation if it authenticates into a
+  *different account*; two profiles over one account are just labels with no AWS-enforced
+  boundary.
+- **Cost attribution.** NFR-1.1 sets a **$10/month ceiling for Ledgerly specifically**. A
+  shared account commingles two projects' spend on one bill, blurring the ceiling and its
+  billing alarm; a dedicated account makes the whole account bill == Ledgerly's spend.
+
+### Decision
+
+Provision a **dedicated AWS account for Ledgerly** as a member account under the owner's
+existing AWS Organization, reachable through the *same* IAM Identity Center. Ledgerly's
+`dev` and `prod` stages remain CDK stages **within that one dedicated account** (unchanged
+from §0.1). Local access is a distinct `ledgerly-dev` profile whose `sso_account_id` is the
+new account — never `768396678224`.
+
+### Alternatives considered
+
+- **Share the CareerVault account (`768396678224`), isolate by resource naming** — no new
+  account to create; fastest start. Rejected: isolation is convention-only (a mistyped
+  command can hit CareerVault), and the two projects' costs commingle, defeating the
+  per-project ceiling and its alarm.
+- **A second, separate AWS Organization / standalone account** — maximal isolation, but
+  redundant: one Organization + Identity Center already exists and cleanly supports
+  multiple member accounts under one login. Rejected as unnecessary overhead.
+
+### Consequences
+
+- **AWS-enforced isolation:** the `ledgerly-dev` profile physically cannot see or mutate
+  CareerVault resources — it authenticates into a different account. Directly satisfies the
+  owner's "wrong project" concern.
+- **Clean cost attribution:** the dedicated account's bill *is* Ledgerly's spend; the
+  Slice-1 billing alarm ($5 actual / $8 forecast, NFR-1.2) measures Ledgerly alone.
+- **One login, many accounts:** the same Identity Center login serves both profiles;
+  `ledgerly-dev` reuses the existing SSO session, only the target account differs.
+- **Setup cost:** a one-time account-creation + permission-set assignment in the
+  Organization management account, plus a `cdk bootstrap` of the new account (Slice 1).
+- **Mandatory safety gate:** before any `cdk` command, verify
+  `aws sts get-caller-identity --profile ledgerly-dev` returns the *new* account id, not
+  `768396678224`.
 
 ---
 

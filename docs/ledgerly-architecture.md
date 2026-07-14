@@ -1,6 +1,6 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
 **Last updated:** 2026-07-13
 
@@ -511,19 +511,25 @@ composed of constructs — not nested stacks (the app is too small to justify th
 ledgerly/
   infra/                    # CDK app (Python): app.py, stacks/, constructs/
   backend/
-    functions/              # one dir per Lambda: api_*, importer, categorizer
-    core/                   # plain-Python domain logic: cycles.py, csv_normalize.py,
-                            #   categorize/ (Categorizer interface + bedrock impl), repo/
+    functions/              # one dir per Lambda: api_*, importer, categorizer (handlers)
+    core/                   # plain-Python domain logic, NO AWS imports: cycles.py,
+                            #   csv_normalize.py, categorize/ (Categorizer *interface*), …
+    adapters/               # AWS-facing seam (boto3): dynamo.py (repo), bedrock.py
+                            #   (Categorizer impl) — quarantines the SDK away from core/
     tests/                  # pytest: unit (core) + integration (moto/dynamodb-local)
   frontend/                 # Vite + React + TS app
     src/  tests/
   docs/                     # canonical docs (this file, ADL, plan, …)
-  .github/workflows/        # CI/CD (slice 2)
+  .github/                  # workflows/ (ci, codeql), dependabot.yml
   .claude/skills/           # /start-slice, /wrap-slice
 ```
 
 `backend/core/` has no AWS imports — that's the portability seam (§0.1) and the unit-test
-surface. `functions/` is handlers + wiring only.
+surface. AWS SDK code (the DynamoDB repository, the Bedrock `Categorizer` implementation)
+lives in `backend/adapters/`, keeping the interface/impl split honest; `functions/` is
+handlers + wiring only. *(Slice-1 correction: earlier drafts placed `repo/` and the Bedrock
+impl inside `core/`, which contradicted the "no AWS imports in core" rule; `adapters/`
+resolves it.)*
 
 ### 5.3 Environment strategy
 
@@ -552,3 +558,4 @@ surface. `functions/` is handlers + wiring only.
 | 0.1 | 2026-07-12 | Initial skeleton |
 | 1.0 | 2026-07-13 | Full Phase 1 architecture: WHERE (§0.1), system design, access-pattern-first data model with cycle-keyed budgets, sequence diagrams, cross-cutting concerns, CDK/IaC structure. Decisions recorded as ADR-002…009 (all owner-approved 2026-07-13). |
 | 1.1 | 2026-07-13 | Owner review feedback: added rendered AWS-style architecture diagram (diagrams-as-code via `render_architecture.py` → PNG/PDF in docs/); §1.1 now treats the rendered diagram as canonical for human review, ASCII as quick reference. |
+| 1.2 | 2026-07-14 | Slice-1 implementation correction (no design change): §5.2 repository layout — AWS SDK code (DynamoDB repo, Bedrock `Categorizer` impl) moved from `core/` to a new `backend/adapters/` seam so `core/` stays genuinely AWS-import-free; `.github/` layout updated. |

@@ -58,9 +58,37 @@ _Approved 2026-07-13 (architecture doc v1.1; ADR-001…009 all Accepted):_
   history. Diagram: `docs/ledgerly-architecture-diagram.png` (regenerate via
   `docs/render_architecture.py` — diagram as code).
 
+## AWS account & profile
+
+Ledgerly has its **own dedicated AWS account** (ADR-010), separate from other projects that
+share the same SSO login. Pin these:
+
+- **Account:** `816020558700` · **Region:** `us-east-1` · **Profile:** `ledgerly-dev`
+
+**Rule: always prefix AWS/CDK/SAM commands with `AWS_PROFILE=ledgerly-dev` (or pass
+`--profile ledgerly-dev`); never rely on a default profile.** A different project
+(CareerVault, `768396678224`) shares this SSO login, so a bare profile can silently hit the
+wrong account. Guards enforcing this: a SessionStart hook (`.claude/check-aws-profile.sh`)
+asserts the account at session start; `/start-slice` re-asserts it and stops on mismatch;
+and `infra/app.py` pins the account so a wrong-account `cdk deploy` fails fast.
+
 ## Components / functions
 
-_None yet — filled in during Phase 1/first slices._
+_Seeded in Slice 1 (walking skeleton); grows per slice._
+
+- **`backend/core/`** — pure domain logic, **no AWS imports** (portability seam + unit-test
+  surface). `settings.py`: default monthly PROFILE + owner-facing projection.
+- **`backend/adapters/`** — AWS-facing persistence (boto3). `dynamo.py`:
+  `get_or_create_settings` (AP #1 — idempotent create-on-first-read).
+- **`backend/functions/api_settings/handler.py`** — `GET /settings` Lambda; identity from
+  verified JWT claims only (FR-1.3).
+- **`infra/` (CDK, Python)** — `LedgerlyStack` = constructs: `Data` (DynamoDB single table
+  + GSI1/GSI2, PITR), `Auth` (Cognito pool + Hosted-UI/PKCE client + owner user), `Api`
+  (HTTP API + JWT authorizer + settings Lambda, least-privilege role), `Web` (private S3 +
+  CloudFront + runtime `config.json`), `Ops` (AWS Budgets billing alarm). Ingest +
+  Categorization arrive in Slices 4–5.
+- **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`,
+  calls `GET /settings`, renders the round-trip result.
 
 ## Repository layout
 
@@ -73,34 +101,46 @@ KICKOFF.md           # The reusable agentic-engineering framework (leave untouch
 
 ## Conventions
 
-_To solidify at the end of the first implementation slice. Already binding:_
+_Solidified at the end of Slice 1. Binding:_
 
 - User identity comes from the auth token, never the request body (FR-1.3); secrets
-  never in code/repo (NFR-4.3); all infra as code (NFR-5.1).
-- **Diagram as code:** architecture diagrams are generated from
-  `docs/render_architecture.py` (mingrammer) — re-render in the same commit as any
+  never in code/repo/logs (NFR-4.3); all infra as code (NFR-5.1).
+- **Portability seam:** business logic in `backend/core/` has **no AWS imports** (the
+  unit-test surface); boto3/AWS lives in `backend/adapters/`; `functions/` handlers stay
+  thin (architecture §5.2).
+- **AWS profile:** always `AWS_PROFILE=ledgerly-dev` (account `816020558700`) — never a
+  default profile (ADR-010; see "AWS account & profile").
+- **Diagram as code:** re-render `docs/render_architecture.py` in the same commit as any
   system-shape change.
-- Business logic lives in `backend/core/` with no AWS imports; handlers stay thin
-  (architecture §5.2).
 - Review `cdk diff` before every deploy (ADR-004 learning habit).
+- **Lint/test:** `ruff check backend infra` (config `ruff.toml`); `pytest` (backend);
+  `npm run build`/`test` (frontend). CI runs all on PR (`.github/workflows/ci.yml`).
+- **Security gate:** `/security-review` is a blocking pre-commit step every slice; CodeQL +
+  Dependabot are the remote net on PRs.
 
 ## Cost constraints
 
 - **$10/month effective hard ceiling** (NFR-1.1) — single-user personal app; serverless
   keeps idle cost near zero. Plaid production would be a deliberate ADR-recorded revision.
-- Guards in place: none yet — AWS Budgets alarm ($5 actual / $8 forecast) ships in
-  Slice 1 (NFR-1.2). Bedrock spend rides the same AWS bill, so the alarm covers LLM cost
-  too (ADR-008). Expected steady state ≈ $2–4/month total.
+- Guards in place: **AWS Budgets alarm live** ($5 actual / $8 forecast) as of Slice 1
+  (NFR-1.2); the dedicated account (ADR-010) makes the account bill == Ledgerly spend.
+  Bedrock spend rides the same AWS bill, so the alarm covers LLM cost too (ADR-008).
+  Expected steady state ≈ $2–4/month total.
 
 ## Current build phase
 
-**Phase 1 — complete (2026-07-13). Current slice: Slice 1 — walking skeleton
-(not started; begin with `/start-slice` in a fresh session).**
+**Slice 1 — walking skeleton: complete & deployed to dev (2026-07-14), in PR review.
+Next: Slice 2 — CI/CD deploy pipeline (OIDC federation + prod promotion).**
 
-- Last completed: P1 Architecture — architecture approved v1.1 (2026-07-13, owner
-  review; one amendment: rendered diagrams-as-code architecture diagram), ADR-002…009
-  Accepted, slice roadmap 1–8 owner-approved (walking skeleton → CI/CD → categories/
-  cycle engine → CSV import → AI categorization → dashboard → review queue → hardening).
+- Last completed: Slice 1 — deployed dev end-to-end (Cognito Hosted-UI/PKCE login → HTTP
+  API JWT authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live in
+  browser); billing alarm active; unauthenticated request → 401. Extras beyond the roadmap
+  (owner-requested): CI (pytest/ruff/build/`cdk synth`) + CodeQL + Dependabot under
+  `.github/`, and a per-repo AWS account guard (ADR-010, `.claude/check-aws-profile.sh` +
+  SessionStart hook). Security review at wrap: 3 fixes applied, rest deferred to Slice 8.
+- Architecture (unchanged design): approved v1.1 → doc bumped to v1.2 (Slice-1 layout
+  correction: AWS persistence lives in `backend/adapters/`, keeping `core/` AWS-free).
+  ADR-001…010 Accepted.
 - **The roadmap lives in `docs/ledgerly-plan.md`** — slice order, per-slice scope,
   exit criteria, open decisions, and completion notes. Read the status board + current
   slice section at session start; update it when a slice wraps.

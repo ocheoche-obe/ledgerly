@@ -74,8 +74,8 @@ whose findings loop back into new requirements, ADRs, or slices here.
 |---|---|---|---|---|
 | P0 | Requirements | — | ✅ approved v1.0 (2026-07-13) | — |
 | P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
-| 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ⬜ next | — |
-| 2 | CI/CD pipeline + test scaffolding | NFR-5.1/5.2/5.3 | ⬜ | — |
+| 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | _PR pending_ |
+| 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ⬜ | — |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ⬜ | — |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
@@ -116,7 +116,7 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 > Slices are sized for one or two evening/weekend sessions (business constraint §6).
 > Key refs for every slice: architecture doc §2 (data model), §3 (sequences), §5 (IaC).
 
-### Slice 1 — Walking skeleton ⬜ (next)
+### Slice 1 — Walking skeleton ✅ (deployed to dev 2026-07-14)
 
 - **Goal:** prove the entire stack works end-to-end, deployed: the owner logs into the
   deployed SPA, it makes an authenticated API call, and data comes back from DynamoDB.
@@ -129,22 +129,51 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   architecture §5.2.
 - **Scope out:** CI/CD (Slice 2 — manual `cdk deploy` is acceptable *only* this slice);
   any real feature UI; custom domain.
-- **⚠ Open decisions:** none — all covered by ADR-001…009.
-- **Exit criteria:** ☐ owner logs in on the deployed dev URL and sees the settings
-  round-trip ☐ unauthenticated API request → 401 ☐ billing alarm confirmed active in
-  console ☐ `pytest` runs (even if few tests) ☐ docs current (CLAUDE.md conventions +
-  components sections seeded).
-- **Completion notes:** _—_
+- **⚠ Open decisions:** none — all covered by ADR-001…009 (+ ADR-010, account topology,
+  recorded during setup).
+- **Exit criteria:** ☑ owner logs in on the deployed dev URL and sees the settings
+  round-trip (verified live in browser) ☑ unauthenticated API request → 401 (curl: no-token
+  and bad-token both 401) ☑ billing alarm confirmed active (`ledgerly-dev-monthly`, $10,
+  $5/$8 notifications) ☑ `pytest` runs (4 passing) ☑ docs current (CLAUDE.md conventions +
+  components seeded).
+- **Completion notes:**
+  - **Deployed dev stack `Ledgerly-dev`** (account `816020558700`, us-east-1): DynamoDB
+    single table + GSI1/GSI2 (PITR on); Cognito pool + Hosted-UI domain + PKCE client +
+    seeded owner user; HTTP API + JWT authorizer + `GET /settings` Lambda (least-privilege,
+    table-scoped); private S3 + CloudFront (OAC) serving the SPA + runtime `config.json`;
+    AWS Budgets alarm. Site: `dbe60z416ty5t.cloudfront.net`.
+  - **Layout decision:** kept `backend/core/` AWS-free (the doc's stronger principle) by
+    putting the DynamoDB adapter in `backend/adapters/` rather than `core/repo/`.
+    Architecture §5.2 corrected + bumped to v1.2 (no design change).
+  - **ADR-010** added (dedicated AWS account per project) + the account guard
+    (`.claude/check-aws-profile.sh`, SessionStart hook, `/start-slice` hard assertion,
+    `app.py` account pin).
+  - **Beyond roadmap (owner-requested):** CI (pytest/ruff/build/`cdk synth`), CodeQL SAST,
+    Dependabot under `.github/`; ruff introduced as the Python linter. `/wrap-slice` now
+    enforces `/security-review` as a blocking pre-commit gate.
+  - **Security review:** fixed CORS + Cognito callback localhost leaking into prod, and
+    pinned `aws-cdk@2` in CI. Deferred to Slice 8: SPA token storage (localStorage → XSS),
+    CloudFront security headers/CSP, required MFA. Accepted: `grant_read_write_data` breadth
+    (architecture §4.2 idiom, resource-scoped).
+  - **Gotchas:** local Node is v26 (jsii-untested by CDK) → use
+    `JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1` locally; CI uses Node 22. SPA sends the
+    Cognito **access token** — confirmed accepted by the HTTP API JWT authorizer.
+  - **Deferred to Slice 2:** the deploy pipeline itself (OIDC → auto-deploy dev, prod
+    promotion) and prod stack creation. The prod-hardening CORS/callback fixes take effect
+    when prod first deploys.
 
 ### Slice 2 — CI/CD pipeline + test scaffolding ⬜
 
 - **Goal:** no more workstation deploys — merge to `main` ships `dev` automatically;
   `prod` exists and promotes on manual approval (NFR-5.2).
+- **Already landed in Slice 1 (owner-requested):** the *CI-check* half — `ci.yml`
+  (backend `pytest`/`ruff`, frontend build/test, `cdk synth`), CodeQL SAST, Dependabot.
+  Slice 2 is now the *deploy* half only.
 - **Scope in:** GitHub Actions with OIDC federation into a deploy role (no long-lived AWS
-  keys); workflow: backend `pytest` + frontend build/test → `cdk diff` → deploy `dev`;
-  manually-approved `prod` promotion job; `prod` stack created (deletion + termination
-  protection on); test scaffolding: `pytest` layout for `backend/core` + moto-based repo
-  tests, `vitest` for frontend.
+  keys); extend the pipeline: on merge to `main`, `cdk diff` → deploy `dev`; manually-
+  approved `prod` promotion job; `prod` stack created (deletion + termination protection
+  on); test scaffolding to grow: moto-based adapter tests for `backend/adapters`, first
+  `vitest` tests for frontend.
 - **Scope out:** e2e browser tests (revisit when the dashboard exists).
 - **⚠ Open decisions:** none.
 - **Exit criteria:** ☐ push to `main` deploys dev with tests gating ☐ prod promotion job
@@ -252,6 +281,13 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   time (NFR-7.2 <15 min), categorization accuracy (criterion 2 baseline), billing
   actuals vs. ceiling (criterion 4); fix the sharp edges that real use surfaces; seed
   `ledgerly-evaluation.md` with the v1 measurement plan + first data points.
+- **Security hardening carried from Slice 1's review (financial-data posture):**
+  - SPA auth-token storage — move off `localStorage` (XSS-exfiltration risk for the 30-day
+    refresh token); evaluate in-memory + silent renew or a token-handler pattern. May
+    warrant an ADR when the approach is chosen.
+  - CloudFront **security response headers** — add a `ResponseHeadersPolicy` (CSP tuned to
+    the Cognito domain + API origin, HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options`).
+  - **Require MFA** on the Cognito pool (currently `OPTIONAL`; TOTP already enabled).
 - **Scope out:** anything that looks like a new feature → parking lot.
 - **⚠ Open decisions:** whether a custom domain is wanted for daily use.
 - **Exit criteria:** ☐ owner completes a real cycle ritual on prod ☐ evaluation doc
@@ -289,3 +325,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.2 | 2026-07-13 | P0 complete: requirements approved v1.0 (two amendments); P1 marked next |
 | 0.3 | 2026-07-13 | P1 architecture approved (v1.1, ADR-002…009); v1 sliced into slices 1–8 (walking skeleton first); diagram-as-code principle added |
 | 0.4 | 2026-07-13 | Slice roadmap owner-approved; P1 marked complete. Diagram-as-code skill removed from the plan — it's a portable side deliverable for the project-starter kit, not Ledgerly scope |
+| 0.5 | 2026-07-14 | Slice 1 ✅ deployed to dev (walking skeleton, all exit criteria met). ADR-010 (dedicated account) added. CI/CodeQL/Dependabot + AWS account guard landed ahead of roadmap; Slice 2 narrowed to the deploy pipeline. Slice-1 security review's deferred items folded into Slice 8 |
