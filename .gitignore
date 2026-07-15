@@ -10,3 +10,31 @@
 # Local secrets / env
 .env
 .env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# AWS CDK
+infra/cdk.out/
+cdk.out/
+.cdk.staging/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.tsbuild-node/
+*.tsbuildinfo
+npm-debug.log*
+
+# CDK deploy artifacts (contain deployed resource IDs — not secrets, but regenerated)
+infra/*-outputs.json
+
+# AWS local creds (never commit)
+.aws/

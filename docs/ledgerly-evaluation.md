@@ -1,7 +1,7 @@
 # Ledgerly — Evaluation & Retrospective
 
 **Status:** Living document — updated at each slice wrap and each release
-**Last updated:** 2026-07-12
+**Last updated:** 2026-07-14
 
 > Lifecycle stage 6. This is the hinge that turns the cycle: it measures what actually
 > shipped against what we *said* we wanted, and its findings become the inputs to the next
@@ -43,12 +43,28 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
 
 > One short entry per slice, added at `/wrap-slice`.
 
-### Slice {{N}} — {{name}}
-- **Met exit criteria?** {{yes/no — which, if any, slipped}}
-- **Actual cost / resource use:** {{vs. ceiling}}
-- **What worked:** {{...}}
-- **What surprised us / didn't work:** {{...}}
-- **Findings routed to:** {{ADR-00X / plan slice N / parking lot / requirements update}}
+### Slice 1 — Walking skeleton (2026-07-14)
+- **Met exit criteria?** Yes — all five. Login round-trip verified live in the browser;
+  unauth → 401 (no-token + bad-token); billing alarm active; `pytest` 4/4; docs seeded.
+- **Actual cost / resource use:** effectively $0 so far — all within free tier (DynamoDB
+  on-demand, Lambda, HTTP API, Cognito) except CloudFront/S3 pennies. Dedicated account
+  (ADR-010) means the account bill == Ledgerly spend, so the $5/$8 budget alarm is a true
+  read. Well under the $10 ceiling (NFR-1.1).
+- **What worked:** the CDK construct split synth'd and deployed clean first try (~4.7 min);
+  runtime `config.json` pattern decoupled SPA build from stack outputs; the JWT authorizer
+  rejected unauth requests before the Lambda (401s never reached compute).
+- **What surprised us / didn't work:** (1) local Node v26 is jsii-untested by CDK — needed
+  `JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1` locally; CI pinned to Node 22. (2) The
+  architecture's §5.2 layout self-contradicted ("no AWS in core" vs. `repo/` in `core/`) —
+  resolved with a `backend/adapters/` seam (doc corrected to v1.2). (3) Security review
+  caught dev-origin (`localhost`) leaking into the prod CORS + Cognito callback allowlists.
+- **Findings routed to:**
+  - Dedicated-account decision → **ADR-010** (Accepted).
+  - `core/` vs AWS-imports contradiction → **architecture doc v1.2** correction.
+  - Token-in-localStorage, CloudFront security headers/CSP, required MFA → **Slice 8**
+    (hardening).
+  - Deploy pipeline (OIDC, prod promotion) → **Slice 2** (was already its scope; narrowed).
+  - Node/jsii + access-token-works gotchas → plan Slice 1 completion notes + memory.
 
 ---
 
@@ -102,3 +118,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 | Date | Change |
 |---|---|
 | 2026-07-12 | Initial evaluation scaffold |
+| 2026-07-14 | Slice 1 per-slice beat added (walking skeleton — all exit criteria met) |

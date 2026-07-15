@@ -1,0 +1,4 @@
+# Backend dev/test tooling — NOT shipped to Lambda (the runtime provides boto3, and core/
+# has no third-party runtime deps). Dependabot tracks this manifest for the /backend dir.
+pytest>=8,<9
+ruff>=0.6,<1.0

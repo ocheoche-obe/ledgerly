@@ -1,0 +1,12 @@
+[project]
+name = "ledgerly-backend"
+version = "0.1.0"
+description = "Ledgerly backend — Lambda handlers, pure domain core, and AWS adapters."
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+# Run from backend/; make `core`, `adapters`, `functions` importable as top-level packages
+# (mirrors the Lambda asset root, where backend/ is on sys.path).
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
