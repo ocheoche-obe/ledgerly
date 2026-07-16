@@ -173,7 +173,12 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   keys); extend the pipeline: on merge to `main`, `cdk diff` → deploy `dev`; manually-
   approved `prod` promotion job; `prod` stack created (deletion + termination protection
   on); test scaffolding to grow: moto-based adapter tests for `backend/adapters`, first
-  `vitest` tests for frontend.
+  `vitest` tests for frontend — at minimum a smoke test (render `App`, assert the login
+  screen appears) so the frontend CI job stops passing on `--passWithNoTests`. This gap
+  became real 2026-07-15: the Dependabot wave landed React 19 + TS 7 + Vite 8 + vitest 4
+  on `main` verified only by typecheck/build, with zero runtime coverage. The first
+  pipeline deploy of this slice doubles as the runtime verification of that toolchain
+  (browser login round-trip against dev).
 - **Scope out:** e2e browser tests (revisit when the dashboard exists).
 - **⚠ Open decisions:** none.
 - **Exit criteria:** ☐ push to `main` deploys dev with tests gating ☐ prod promotion job

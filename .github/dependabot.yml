@@ -4,27 +4,44 @@ version: 2
 #   pip  → infra/requirements.txt  and  backend/ (pyproject.toml + requirements-dev.txt)
 #   npm  → frontend/ (package.json + package-lock.json)
 #   github-actions → the workflows in .github/workflows/
+#
+# Cadence: monthly, swept at slice start (see .claude/skills/start-slice). Security
+# updates ignore this schedule and arrive immediately, so slowing version updates
+# costs nothing on the safety side. Minor/patch bumps arrive as one grouped PR per
+# ecosystem; majors stay standalone so they get a deliberate upgrade decision.
 updates:
   - package-ecosystem: pip
     directory: /infra
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      infra-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: pip
     directory: /backend
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      backend-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     # Interdependent toolchains must bump together, or each solo PR dies on
     # npm peer-dependency resolution (react 19 vs react-dom 18, plugin-react
-    # requiring a newer vite, ...). Seen live: PRs #11/#13/#14.
+    # requiring a newer vite, ...). Seen live: PRs #11/#13/#14. The react and
+    # vite groups cover ALL update types (majors included) so ecosystem majors
+    # land atomically; the catch-all excludes them to keep membership unambiguous.
     groups:
       react:
         patterns:
@@ -37,9 +54,26 @@ updates:
           - vite
           - vitest
           - "@vitejs/*"
+      frontend-minor-patch:
+        exclude-patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+          - vite
+          - vitest
+          - "@vitejs/*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
