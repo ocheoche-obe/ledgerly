@@ -20,6 +20,13 @@ TABLE_NAME = "ledgerly-test"
 def dynamo(monkeypatch):
     """Yield a freshly-imported adapter bound to a moto table with the app's key schema."""
     monkeypatch.setenv("TABLE_NAME", TABLE_NAME)
+    # The Lambda runtime always sets AWS_REGION; the test env (and CI) doesn't, so the
+    # adapter's region-less boto3 resource would raise NoRegionError. Pin a region + dummy
+    # credentials (standard moto hygiene) so nothing can reach real AWS.
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     with mock_aws():
         boto3.client("dynamodb", region_name="us-east-1").create_table(
             TableName=TABLE_NAME,
