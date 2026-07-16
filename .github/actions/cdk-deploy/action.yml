@@ -1,0 +1,56 @@
+name: cdk-deploy
+description: >-
+  Build the SPA and deploy one Ledgerly stage via CDK, assuming the GitHub OIDC deploy role
+  (ADR-011). Shared by the dev and prod jobs so both deploy identically; the caller job sets
+  the GitHub Environment (and therefore the OIDC subject), not this action.
+
+inputs:
+  stage:
+    description: Which stage to deploy — dev or prod.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # OIDC → assume the narrow deploy role. No stored AWS keys (NFR-4.3). The account id is
+    # not a secret (it is pinned in infra/ledgerly/config.py).
+    - name: Assume deploy role (OIDC)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::816020558700:role/ledgerly-github-deploy
+        aws-region: us-east-1
+        role-session-name: gha-deploy-${{ inputs.stage }}
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    # The SPA is a plain-directory CDK asset (WebConstruct reads frontend/dist), so it must
+    # be built before synth/deploy or the BucketDeployment ships only config.json.
+    - name: Build SPA
+      shell: bash
+      working-directory: frontend
+      run: |
+        npm ci
+        npm run build
+
+    - name: Install CDK CLI + infra deps
+      shell: bash
+      run: |
+        npm install -g aws-cdk@2
+        pip install -r infra/requirements.txt
+
+    - name: cdk diff (informational)
+      shell: bash
+      working-directory: infra
+      run: cdk diff Ledgerly-${{ inputs.stage }}
+
+    - name: cdk deploy
+      shell: bash
+      working-directory: infra
+      run: cdk deploy Ledgerly-${{ inputs.stage }} --require-approval never --progress events

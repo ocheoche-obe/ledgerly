@@ -8,10 +8,22 @@ credentials resolve to a different account, which is a deploy-time account guard
 """
 import aws_cdk as cdk
 
-from ledgerly.config import STAGES
+from ledgerly.cicd_stack import LedgerlyCicdStack
+from ledgerly.config import LEDGERLY_ACCOUNT, LEDGERLY_REGION, STAGES
 from ledgerly.stack import LedgerlyStack
 
 app = cdk.App()
+
+# Account-global CI/CD identity (ADR-011) — one OIDC provider + deploy role for the account,
+# deployed once by hand; the pipeline then uses it to deploy both stages below.
+LedgerlyCicdStack(
+    app,
+    "Ledgerly-cicd",
+    account=LEDGERLY_ACCOUNT,
+    region=LEDGERLY_REGION,
+    env=cdk.Environment(account=LEDGERLY_ACCOUNT, region=LEDGERLY_REGION),
+    description="Ledgerly CI/CD — GitHub OIDC deploy federation (ADR-011)",
+)
 
 for stage in STAGES.values():
     LedgerlyStack(
