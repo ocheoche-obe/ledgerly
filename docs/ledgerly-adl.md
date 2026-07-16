@@ -449,4 +449,63 @@ new account — never `768396678224`.
 
 ---
 
+## ADR-011: CI/CD deploy federation — GitHub OIDC assuming CDK bootstrap roles
+
+**Status:** Accepted (2026-07-15, Slice 2)
+
+### Context
+
+Slice 1 deployed by manual `cdk deploy` from the workstation — explicitly acceptable only
+for the first slice (architecture §5.4). Slice 2 automates it: GitHub Actions must deploy
+`dev` on push to `main` and `prod` on manual approval, **with no long-lived AWS keys stored
+in GitHub** (NFR-4.3 in spirit). The architecture doc (§5.4) already fixes the shape —
+GitHub Actions → OIDC federation into a deploy role → tests → `cdk diff` → deploy — but is
+silent on *how much permission that federated identity holds*. This is a security decision
+(the identity is reachable by any workflow run on the repo) and belongs in an ADR before the
+IAM is written.
+
+`cdk bootstrap` (run in Slice 1) already provisioned a set of scoped roles in the account:
+a `*-deploy-role` (drives the deployment) and a `*-cfn-exec-role` (the role CloudFormation
+actually uses to create/modify resources, holding the broad service rights). The question is
+whether the GitHub-facing OIDC role *reuses* these or holds broad rights itself.
+
+### Decision
+
+The GitHub OIDC identity provider trusts this repo only; the **OIDC role is narrow** — its
+only permissions are `sts:AssumeRole`/`sts:TagSession` on the CDK bootstrap roles
+(`cdk-hnb659fds-*-816020558700-us-east-1`). Deploys run `cdk deploy` against those roles, so
+the broad CloudFormation/service permissions live in the **CFN execution role**, never in
+the federated identity. The OIDC trust policy scopes `sub` to exactly two subjects — the dev
+auto-deploy (`repo:ocheoche-obe/ledgerly:ref:refs/heads/main`) and the prod job
+(`repo:ocheoche-obe/ledgerly:environment:prod`) — so a PR branch or a fork cannot assume the
+role. The `prod` deploy is additionally gated behind a GitHub Environment with a required
+reviewer (the owner) rather than by a distinct AWS identity.
+
+### Alternatives considered
+
+- **Broad custom deploy role assumed directly by GitHub** — one policy carrying
+  `cloudformation:*` + every service CDK touches (S3, DynamoDB, Lambda, Cognito, CloudFront,
+  IAM `CreateRole`/`PassRole`, …). Simpler to read in one place, but the federated identity
+  reachable from CI holds account-wide power, and it duplicates permissions the bootstrap
+  roles already encapsulate. Rejected: larger blast radius for the internet-reachable
+  identity, and non-idiomatic for CDK.
+- **Long-lived IAM access keys in GitHub secrets** — rejected outright: stored static
+  credentials violate NFR-4.3's spirit and the architecture's "zero runtime secrets" stance;
+  OIDC is the whole point.
+
+### Consequences
+
+- **Least-privilege entry point:** the only thing GitHub's identity can do is assume the
+  pre-scoped CDK roles; broad rights stay in the CloudFormation execution role that only
+  CloudFormation uses.
+- **Idiomatic + low-maintenance:** as new constructs need new permissions, the bootstrap
+  roles carry them — the OIDC role's policy never changes.
+- **Coupled to bootstrap:** re-bootstrapping or changing the CDK qualifier means updating the
+  OIDC role's `AssumeRole` resource ARNs. Acceptable and rare.
+- **Approval is a GitHub gate, not an AWS one:** `prod` protection depends on the GitHub
+  Environment reviewer rule; both stages ultimately assume roles in the same account
+  (consistent with §0.1's one-account/two-stage model).
+
+---
+
 <!-- Copy the ADR block above for each new decision. Keep them append-only. -->

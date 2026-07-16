@@ -2,3 +2,5 @@
 # has no third-party runtime deps). Dependabot tracks this manifest for the /backend dir.
 pytest>=9.1.1,<10
 ruff>=0.15.21,<1.0
+# moto mocks DynamoDB in-process so backend/adapters can be tested without real AWS.
+moto[dynamodb]>=5.0,<6

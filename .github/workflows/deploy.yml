@@ -1,0 +1,50 @@
+name: Deploy
+
+# On merge to main: run the full Checks gate, then auto-deploy dev. prod deploys only after
+# dev succeeds AND a required reviewer approves the `prod` GitHub Environment (NFR-5.2). No
+# long-lived AWS keys anywhere — every deploy assumes the OIDC role via id-token (ADR-011).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC federation into the deploy role
+
+# Never cancel an in-flight deploy; serialize pushes to main instead.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  deploy-dev:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/cdk-deploy
+        with:
+          stage: dev
+
+  deploy-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    # The `prod` environment carries a required-reviewer protection rule → manual approval
+    # gate. Setting it here also makes the OIDC subject `...:environment:prod`, which is the
+    # only subject (besides main) the deploy role trusts (ADR-011).
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/cdk-deploy
+        with:
+          stage: prod
