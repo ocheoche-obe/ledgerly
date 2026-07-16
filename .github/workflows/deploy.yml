@@ -7,6 +7,12 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # Pure-docs pushes don't change deployable artifacts — skip the deploy (and the dangling
+    # prod-pending approval it would otherwise create). A mixed code+docs push still deploys.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
 
 permissions:
   contents: read

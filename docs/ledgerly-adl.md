@@ -1,7 +1,7 @@
 # Ledgerly — Architectural Decisions Log (ADL)
 
 **Status:** Living document — updated as decisions are made
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-15
 
 ---
 
@@ -55,6 +55,7 @@ Superseded.
 | ADR-008 | AI categorization: Amazon Bedrock + Claude Opus 4.8, swappable interface | Accepted |
 | ADR-009 | Async backbone: SQS queue + DLQ for categorization | Accepted |
 | ADR-010 | AWS account topology: dedicated account per project | Accepted |
+| ADR-011 | CI/CD deploy federation: GitHub OIDC assuming CDK bootstrap roles | Accepted |
 
 ---
 
