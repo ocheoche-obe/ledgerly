@@ -82,11 +82,16 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   `get_or_create_settings` (AP #1 — idempotent create-on-first-read).
 - **`backend/functions/api_settings/handler.py`** — `GET /settings` Lambda; identity from
   verified JWT claims only (FR-1.3).
-- **`infra/` (CDK, Python)** — `LedgerlyStack` = constructs: `Data` (DynamoDB single table
-  + GSI1/GSI2, PITR), `Auth` (Cognito pool + Hosted-UI/PKCE client + owner user), `Api`
-  (HTTP API + JWT authorizer + settings Lambda, least-privilege role), `Web` (private S3 +
-  CloudFront + runtime `config.json`), `Ops` (AWS Budgets billing alarm). Ingest +
-  Categorization arrive in Slices 4–5.
+- **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
+  constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
+  Hosted-UI/PKCE client + owner user), `Api` (HTTP API + JWT authorizer + settings Lambda,
+  least-privilege role), `Web` (private S3 + CloudFront + runtime `config.json`), `Ops` (AWS
+  Budgets billing alarm). Ingest + Categorization arrive in Slices 4–5. Separately,
+  `LedgerlyCicdStack` (`Ledgerly-cicd`, account-global, deployed once) = `Cicd` construct:
+  GitHub OIDC provider + narrow `ledgerly-github-deploy` role (ADR-011).
+- **`.github/` (CI/CD)** — `checks.yml` (reusable test/lint/synth gate) called by `ci.yml`
+  (PRs) and `deploy.yml` (push to `main` → deploy `dev`, then manual-approved `prod` via the
+  `cdk-deploy` composite action); `codeql.yml` (SAST); `dependabot.yml`.
 - **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`,
   calls `GET /settings`, renders the round-trip result.
 
@@ -129,18 +134,25 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 1 — walking skeleton: complete & deployed to dev (2026-07-14), in PR review.
-Next: Slice 2 — CI/CD deploy pipeline (OIDC federation + prod promotion).**
+**Slice 2 — CI/CD deploy pipeline: complete & deployed (2026-07-15), PR [#19] merged.
+Next: Slice 3 — Categories, settings & budget-cycle engine.**
 
-- Last completed: Slice 1 — deployed dev end-to-end (Cognito Hosted-UI/PKCE login → HTTP
-  API JWT authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live in
-  browser); billing alarm active; unauthenticated request → 401. Extras beyond the roadmap
-  (owner-requested): CI (pytest/ruff/build/`cdk synth`) + CodeQL + Dependabot under
-  `.github/`, and a per-repo AWS account guard (ADR-010, `.claude/check-aws-profile.sh` +
-  SessionStart hook). Security review at wrap: 3 fixes applied, rest deferred to Slice 8.
+- Last completed: Slice 2 — GitHub OIDC deploy pipeline (ADR-011). Push to `main` runs the
+  reusable `checks.yml` gate → auto-deploys `dev` → `prod` promotes on manual approval
+  (GitHub Environment `prod`, owner = required reviewer). Zero long-lived AWS keys: a narrow
+  `ledgerly-github-deploy` role only assumes the CDK bootstrap roles. New stacks:
+  `Ledgerly-cicd` (OIDC provider + role, deployed once by hand) and `Ledgerly-prod`
+  (deletion + termination protection on). Test scaffolding closed the Dependabot-wave gap:
+  moto adapter tests + a vitest `App` smoke test. Both exit criteria verified end-to-end.
+- Prior: Slice 1 — deployed dev end-to-end (Cognito Hosted-UI/PKCE login → HTTP API JWT
+  authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live); billing alarm;
+  unauth → 401; CI/CodeQL/Dependabot + AWS account guard (ADR-010) landed ahead of roadmap.
 - Architecture (unchanged design): approved v1.1 → doc bumped to v1.2 (Slice-1 layout
   correction: AWS persistence lives in `backend/adapters/`, keeping `core/` AWS-free).
-  ADR-001…010 Accepted.
+  ADR-001…011 Accepted.
+- **Operational note:** every push to `main` now triggers a deploy run; pure-docs pushes are
+  skipped via `deploy.yml` `paths-ignore`. `main` is not a protected branch (owner's call);
+  the `prod` environment gate is the required-reviewer approval, not branch protection.
 - **The roadmap lives in `docs/ledgerly-plan.md`** — slice order, per-slice scope,
   exit criteria, open decisions, and completion notes. Read the status board + current
   slice section at session start; update it when a slice wraps.

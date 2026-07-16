@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 0.4
+**Version:** 0.6
 **Created:** 2026-07-12
 
 ---
@@ -75,7 +75,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | P0 | Requirements | — | ✅ approved v1.0 (2026-07-13) | — |
 | P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
 | 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
-| 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | 🔨 | — |
+| 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ⬜ | — |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
@@ -162,7 +162,7 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     promotion) and prod stack creation. The prod-hardening CORS/callback fixes take effect
     when prod first deploys.
 
-### Slice 2 — CI/CD pipeline + test scaffolding ⬜
+### Slice 2 — CI/CD pipeline + test scaffolding ✅ (deployed 2026-07-15)
 
 - **Goal:** no more workstation deploys — merge to `main` ships `dev` automatically;
   `prod` exists and promotes on manual approval (NFR-5.2).
@@ -180,10 +180,43 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   pipeline deploy of this slice doubles as the runtime verification of that toolchain
   (browser login round-trip against dev).
 - **Scope out:** e2e browser tests (revisit when the dashboard exists).
-- **⚠ Open decisions:** none.
-- **Exit criteria:** ☐ push to `main` deploys dev with tests gating ☐ prod promotion job
-  runs and deploys the skeleton ☐ no AWS secrets stored in GitHub ☐ docs current.
-- **Completion notes:** _—_
+- **⚠ Open decisions:** none. (ADR-011 recorded the deploy-role model at slice start.)
+- **Exit criteria:** ☑ push to `main` deploys dev with tests gating (run 29471170254:
+  `checks` → `deploy-dev` success → `Ledgerly-dev` `UPDATE_COMPLETE`) ☑ prod promotion job
+  runs and deploys the skeleton (manual approval → `Ledgerly-prod` `CREATE_COMPLETE`,
+  termination protection on, API 401s unauth) ☑ no AWS secrets stored in GitHub (OIDC only)
+  ☑ docs current.
+- **Completion notes:**
+  - **ADR-011 — OIDC deploy federation.** New stage-less `Ledgerly-cicd` stack (deployed
+    once by hand, like `cdk bootstrap`) holds a GitHub OIDC provider + a **narrow** deploy
+    role (`ledgerly-github-deploy`): its only power is `sts:AssumeRole`/`sts:TagSession` on
+    the `cdk-hnb659fds-*` bootstrap roles — broad rights stay in the CFN exec role, zero
+    long-lived AWS keys in GitHub. Trust scoped to exactly two subjects
+    (`ref:refs/heads/main`, `environment:prod`).
+  - **Pipeline shape.** `deploy.yml` on push to `main`: reusable `checks.yml` gate →
+    `deploy-dev` (auto) → `deploy-prod` (GitHub Environment `prod`, required reviewer =
+    owner). Build+deploy factored into a composite action (`.github/actions/cdk-deploy`)
+    shared by both stages; the SPA is built (`npm ci && npm run build`) before `cdk deploy`
+    because the `WebConstruct` reads `frontend/dist` as a plain-directory asset.
+  - **CI refactor.** The Slice-1 `ci.yml` jobs became reusable `checks.yml`
+    (`workflow_call`); `ci.yml` now runs it on PRs, `deploy.yml` runs it before deploying —
+    one source of truth for the test gate.
+  - **Test scaffolding (closed the wave gap).** moto-based adapter tests for
+    `backend/adapters/dynamo.py` (3) + a vitest `App` smoke test (login screen renders);
+    dropped `--passWithNoTests`. This is the runtime coverage the React 19 / TS 7 / Vite 8 /
+    vitest 4 Dependabot wave lacked.
+  - **`prod` stack now exists** (`CREATE_COMPLETE`, deletion + termination protection on):
+    site `dbsk8bv05ju9b.cloudfront.net`, API `moar0no8ed`. First prod deploy seeded the
+    owner Cognito user (temp password emailed) — real prod login is a Slice 8 concern.
+  - **Gotchas:** (1) moto adapter test hit `NoRegionError` in CI (no ambient AWS region;
+    the Lambda runtime always sets `AWS_REGION`) → fixture pins region + dummy creds.
+    (2) Now that the pipeline is live, **every push to `main` triggers a deploy run**; a
+    `paths-ignore` (docs/`*.md`) was added to `deploy.yml` so pure-docs pushes don't spin up
+    a deploy + a dangling prod-pending approval.
+  - **Deferred:** e2e browser tests (revisit at the dashboard, Slice 6); adding branch
+    protection to `main` (the prod environment's branch policy was relaxed to `null` because
+    `main` is unprotected — owner's call whether to protect it) → parking lot / owner
+    decision.
 
 ### Slice 3 — Categories, settings & budget-cycle engine ⬜
 
@@ -331,3 +364,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.3 | 2026-07-13 | P1 architecture approved (v1.1, ADR-002…009); v1 sliced into slices 1–8 (walking skeleton first); diagram-as-code principle added |
 | 0.4 | 2026-07-13 | Slice roadmap owner-approved; P1 marked complete. Diagram-as-code skill removed from the plan — it's a portable side deliverable for the project-starter kit, not Ledgerly scope |
 | 0.5 | 2026-07-14 | Slice 1 ✅ deployed to dev (walking skeleton, all exit criteria met). ADR-010 (dedicated account) added. CI/CodeQL/Dependabot + AWS account guard landed ahead of roadmap; Slice 2 narrowed to the deploy pipeline. Slice-1 security review's deferred items folded into Slice 8 |
+| 0.6 | 2026-07-15 | Slice 2 ✅ deployed (OIDC deploy pipeline + prod promotion). ADR-011 added. `Ledgerly-cicd` + `Ledgerly-prod` stacks created; reusable `checks.yml`; moto + vitest tests close the Dependabot-wave coverage gap. Both exit criteria verified end-to-end (dev auto-deploy, prod on manual approval) |

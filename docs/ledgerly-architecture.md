@@ -1,6 +1,6 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
 **Last updated:** 2026-07-13
 
@@ -545,7 +545,9 @@ resolves it.)*
 - **Slice 2 onward:** GitHub Actions → OIDC federation into a deploy role (no long-lived
   AWS keys in GitHub — NFR-4.3 in spirit) → `pytest` + frontend build/test → `cdk diff` →
   deploy `dev` on push to `main`; `prod` promotion is a manually-approved job on the same
-  workflow (NFR-5.2).
+  workflow (NFR-5.2). **Realized in Slice 2 (ADR-011):** the OIDC role is narrow — it only
+  assumes the CDK bootstrap roles, so broad rights stay in the CFN exec role; `prod` is
+  gated by a GitHub Environment required reviewer.
 - Rollback: CloudFormation automatic rollback on failed deploys; data layer is additive
   (new GSIs, no destructive migrations) as a standing rule.
 
@@ -559,3 +561,4 @@ resolves it.)*
 | 1.0 | 2026-07-13 | Full Phase 1 architecture: WHERE (§0.1), system design, access-pattern-first data model with cycle-keyed budgets, sequence diagrams, cross-cutting concerns, CDK/IaC structure. Decisions recorded as ADR-002…009 (all owner-approved 2026-07-13). |
 | 1.1 | 2026-07-13 | Owner review feedback: added rendered AWS-style architecture diagram (diagrams-as-code via `render_architecture.py` → PNG/PDF in docs/); §1.1 now treats the rendered diagram as canonical for human review, ASCII as quick reference. |
 | 1.2 | 2026-07-14 | Slice-1 implementation correction (no design change): §5.2 repository layout — AWS SDK code (DynamoDB repo, Bedrock `Categorizer` impl) moved from `core/` to a new `backend/adapters/` seam so `core/` stays genuinely AWS-import-free; `.github/` layout updated. |
+| 1.3 | 2026-07-15 | Slice-2 deployment story realized (no design change): §5.4 links ADR-011 — GitHub OIDC deploy role is narrow (assumes CDK bootstrap roles only), `prod` gated by a GitHub Environment required reviewer. |

@@ -1,7 +1,7 @@
 # Ledgerly — Evaluation & Retrospective
 
 **Status:** Living document — updated at each slice wrap and each release
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-15
 
 > Lifecycle stage 6. This is the hinge that turns the cycle: it measures what actually
 > shipped against what we *said* we wanted, and its findings become the inputs to the next
@@ -66,6 +66,36 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
   - Deploy pipeline (OIDC, prod promotion) → **Slice 2** (was already its scope; narrowed).
   - Node/jsii + access-token-works gotchas → plan Slice 1 completion notes + memory.
 
+### Slice 2 — CI/CD deploy pipeline + prod promotion (2026-07-15)
+- **Met exit criteria?** Yes — all four, verified end-to-end on the live pipeline (run
+  29471170254): push to `main` → `checks` gate → `deploy-dev` auto (`Ledgerly-dev`
+  `UPDATE_COMPLETE`) → `deploy-prod` on manual approval (`Ledgerly-prod` `CREATE_COMPLETE`,
+  termination protection on, unauth API → 401). No AWS secrets in GitHub — OIDC federation
+  only. Docs current.
+- **Actual cost / resource use:** still ~$0 MTD at slice start; the `prod` stack adds a
+  second idle-serverless footprint (DynamoDB on-demand, Lambda, HTTP API, Cognito,
+  CloudFront/S3 pennies) — expected cents/month, well under the $10 ceiling (NFR-1.1). The
+  OIDC provider + role are free.
+- **What worked:** the CDK bootstrap-role delegation (ADR-011) kept the internet-reachable
+  identity narrow and the role policy trivial; the reusable `checks.yml` gave one test gate
+  for both PRs and deploys; factoring build+deploy into a composite action made dev/prod
+  identical while the job-level `environment:` set the OIDC subject and the approval gate.
+- **What surprised us / didn't work:** (1) the moto adapter test passed locally but hit
+  `NoRegionError` in CI — the adapter's region-less boto3 resource relies on the Lambda
+  runtime's `AWS_REGION`, absent in CI; fixed by pinning region + dummy creds in the
+  fixture. (2) Standing up the pipeline means **every push to `main` now deploys** — a
+  pure-docs push would otherwise create a dangling prod-pending approval; added
+  `paths-ignore` to `deploy.yml`. (3) The `prod` GitHub Environment's `protected_branches`
+  policy would have blocked deploys because `main` isn't a protected branch — relaxed to
+  `null` (the required-reviewer rule is the real gate).
+- **Findings routed to:**
+  - Deploy-role model → **ADR-011** (Accepted).
+  - moto `NoRegionError` + "push to main deploys" gotchas → plan Slice 2 completion notes +
+    memory.
+  - Branch protection for `main` → **owner decision / parking lot** (prod gate works without
+    it via required reviewer).
+  - e2e browser tests → **Slice 6** (when the dashboard exists).
+
 ---
 
 ## 3. Release / version retrospective
@@ -119,3 +149,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 |---|---|
 | 2026-07-12 | Initial evaluation scaffold |
 | 2026-07-14 | Slice 1 per-slice beat added (walking skeleton — all exit criteria met) |
+| 2026-07-15 | Slice 2 per-slice beat added (CI/CD deploy pipeline + prod promotion — all exit criteria met) |
