@@ -1,0 +1,81 @@
+// Shared inline styles for the SPA. Inline-style approach carried over from the Slice-1
+// walking skeleton — deliberately dependency-free (no CSS framework) while the UI is small.
+import type { CSSProperties } from "react";
+
+export const styles: Record<string, CSSProperties> = {
+  main: {
+    fontFamily: "system-ui, sans-serif",
+    maxWidth: 640,
+    margin: "3rem auto",
+    padding: "0 1rem",
+    lineHeight: 1.5,
+  },
+  h1: { marginBottom: 0 },
+  tagline: { color: "#666", marginTop: 4 },
+  card: {
+    border: "1px solid #ddd",
+    borderRadius: 8,
+    padding: "1rem 1.25rem",
+    marginTop: "1.5rem",
+  },
+  sectionTitle: { margin: "0 0 0.75rem", fontSize: "1.1rem" },
+  row: { display: "flex", gap: 12, marginTop: 8, alignItems: "center", flexWrap: "wrap" },
+  button: {
+    padding: "0.45rem 0.9rem",
+    borderRadius: 6,
+    border: "none",
+    background: "#2563eb",
+    color: "white",
+    cursor: "pointer",
+    fontSize: "0.95rem",
+  },
+  buttonGhost: {
+    padding: "0.4rem 0.8rem",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    background: "white",
+    cursor: "pointer",
+    fontSize: "0.9rem",
+  },
+  input: {
+    padding: "0.45rem 0.6rem",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    fontSize: "0.95rem",
+    flex: "1 1 auto",
+    minWidth: 0,
+  },
+  select: {
+    padding: "0.45rem 0.6rem",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    fontSize: "0.95rem",
+  },
+  list: { listStyle: "none", padding: 0, margin: "0.5rem 0 0" },
+  listItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "0.5rem 0",
+    borderTop: "1px solid #eee",
+  },
+  itemName: { flex: "1 1 auto", minWidth: 0 },
+  badge: {
+    fontSize: "0.7rem",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    color: "#92400e",
+    background: "#fef3c7",
+    borderRadius: 4,
+    padding: "0.1rem 0.4rem",
+  },
+  muted: { color: "#666", fontSize: "0.9rem" },
+  error: {
+    background: "#fef2f2",
+    color: "#991b1b",
+    padding: "0.75rem",
+    borderRadius: 6,
+    whiteSpace: "pre-wrap",
+    marginTop: "1rem",
+  },
+};
