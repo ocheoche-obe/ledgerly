@@ -96,6 +96,34 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
     it via required reviewer).
   - e2e browser tests → **Slice 6** (when the dashboard exists).
 
+### Slice 3 — Categories, settings & budget-cycle engine (2026-07-17)
+- **Met exit criteria?** Partially at PR-open: ✅ cycle-engine unit tests cover both cadences
+  + transitions (20 tests), ✅ docs current. ☐ "manageable in deployed app" + ☐ "deployed via
+  pipeline" remain open by design — Slice 3 deploys through the Slice-2 pipeline **on merge**
+  (Option A, chosen to preserve "no workstation deploys"), so the browser smoke-test is a
+  post-merge step, not a pre-PR one. `cdk diff` was reviewed pre-PR as the interim check.
+- **Actual cost / resource use:** no new paid service — categories/settings ride the existing
+  DynamoDB table + a second small API Lambda (`CategoriesFn`). Still ~$0 MTD; well under the
+  $10 ceiling (NFR-1.1).
+- **What worked:** the `core`/`adapters` seam paid off — the entire cycle engine is pure
+  Python with zero AWS, so the dense date math (clamping, phase-lock, transitions) got 20
+  fast unit tests with no mocking. Deriving cycles from a cadence *history* (append-only,
+  `effectiveFrom`-keyed) made "never rewrite past cycles" fall out of the data model rather
+  than needing special-case code.
+- **What surprised us / didn't work:** (1) the first clamp implementation produced an invalid
+  `start > end` window for dates before the earliest cadence's `effectiveFrom` — a unit test
+  caught it; fix: the earliest cadence extends backward indefinitely (matters for back-dated
+  imports in Slice 4). (2) `/code-review medium`, run as a trial, found two real correctness
+  bugs that CI + tests + `/security-review` all passed clean over (a 500-vs-400 crash and a
+  seed-ordering bug that could strand the owner with no categories) — with zero false
+  positives. Strong enough signal that it's now an advisory step in `/wrap-slice`.
+- **Findings routed to:**
+  - Cycle-engine backward-extension + ULID/no-deps packaging → plan Slice 3 completion notes
+    + memory.
+  - `/code-review` value → **process change**: adopted into `/wrap-slice` (advisory, medium).
+  - SPA stale access-token on silent renew (code-review #3) → **Slice 8** (existing token
+    rework); not fixed this slice.
+
 ---
 
 ## 3. Release / version retrospective
@@ -150,3 +178,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 | 2026-07-12 | Initial evaluation scaffold |
 | 2026-07-14 | Slice 1 per-slice beat added (walking skeleton — all exit criteria met) |
 | 2026-07-15 | Slice 2 per-slice beat added (CI/CD deploy pipeline + prod promotion — all exit criteria met) |
+| 2026-07-17 | Slice 3 per-slice beat added (categories, settings & cycle engine — code-complete at PR; deploy/smoke-test post-merge via pipeline). `/code-review` adopted into `/wrap-slice` |
