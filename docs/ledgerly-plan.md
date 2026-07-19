@@ -77,7 +77,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
-| 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
+| 4 | CSV import end-to-end | FR-2.1–2.5 | 🔨 | — |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
@@ -280,13 +280,52 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   FR-2.3 (parser behind an interface keyed by bank format).
 - **Scope out:** categorization (Slice 5 — everything lands `Uncategorized` this slice);
   filters/search (Slice 7).
-- **⚠ Open decisions:** **owner input needed — sample CSV exports from each of the
-  owner's banks** (column layouts, date formats, debit/credit conventions, account
-  identification). Requested at slice start; parsers are built against real samples.
-- **Exit criteria:** ☐ re-uploading the same file adds zero duplicates (FR-2.2 verified
-  against the deployed app) ☐ overlapping exports dedupe ☐ malformed rows counted, not
-  fatal ☐ import report visible ☐ docs current.
-- **Completion notes:** _—_
+- **⚠ Open decisions (resolved at slice start):** the owner provided **two overlapping
+  Chase checking exports** (`Chase5980_Activity_*`; the second a month-to-date subset).
+  Only one bank/format is in play, so one parser this slice. Two data-model decisions
+  surfaced from the real exports and became ADRs before code: **ADR-012** (transaction
+  natural key includes `balanceCents` — the real exports contain legitimately-distinct
+  same-day/-amount/-merchant charges, e.g. 3× `MIRRA VR` at −$31.76 on 06/29, that the
+  §2.4 key would have silently collapsed; balance is stable per posted txn so FR-2.2
+  holds) and **ADR-013** (account identity is an owner-confirmed `accountLabel` at upload,
+  pre-filled from the filename).
+- **Exit criteria:** ☑ re-uploading the same file adds zero duplicates (FR-2.2 — file-hash
+  short-circuit; proven by `test_importer.py`, to be re-verified live) ☑ overlapping
+  exports dedupe (row-level natural-key conditional put; integration-tested with two
+  overlapping fixtures) ☑ malformed rows counted, not fatal (FR-2.5) ☑ import report
+  visible (poll `GET /imports/{id}`) ☑ docs current ☐ deployed via pipeline + owner
+  smoke-test on `dev` _(pending merge — Option A, no workstation deploy)_.
+- **Completion notes:** _Code-complete; deploy + live smoke-test via the pipeline on merge
+  (Option A, as Slice 3). 124 backend tests (was 69) + 13 frontend (was 5); ruff clean;
+  `cdk synth` green for dev + prod._
+  - **CSV pipeline (pure core → adapters → Lambdas).** `core/csv_normalize.py` = a
+    format-keyed parser registry (FR-2.3; one impl, Chase checking) that turns raw text
+    into normalized txns + counted row errors and **never raises on a bad row** (FR-2.5);
+    `core/accounts.py` (ADR-013 identity), `core/imports.py` (import record + statuses),
+    `core/transactions.py` (txn item shape, all Uncategorized this slice). Adapters:
+    `dynamo.py` grew file-hash/txn conditional puts + import R/W; new `s3.py` mints the
+    presigned PUT + recovers `<sub>/<importId>` from the S3 event key (identity from the
+    key, never client input). Lambdas: S3-triggered `importer`, `api_imports`
+    (presign + polling), `api_transactions` (date-window list).
+  - **Idempotency at three levels held end-to-end** (integration-tested): file
+    (`FILEHASH#`), row (natural key incl. balance), and **S3 at-least-once redelivery** — a
+    redelivered event for an already-terminal import is a no-op (guard added so counts don't
+    recompute to all-duplicate); `claim_file` recognizes its own prior claim so a mid-crash
+    replay resumes rather than false-flagging the file as a duplicate.
+  - **New `IngestConstruct`** (upload bucket: private, SSE-S3, TLS-only, 30-day object
+    expiry since raw is preserved in DynamoDB per FR-2.4, CORS scoped to the SPA origin[s]
+    for the browser PUT; import Lambda: 2-min timeout, table + bucket-read least-privilege;
+    S3→Lambda notification on `.csv`). `ApiConstruct` gained the imports/transactions
+    Lambdas (+ `s3:PutObject` on the bucket so presigned URLs work) and their routes.
+    **No SQS yet** (Slice 5). The architecture **diagram already depicted this exact ingest
+    flow** (S3 CSV uploads → import_handler → DynamoDB, 30-day expiry), so no system-shape
+    change to re-render.
+  - **Frontend:** `ImportPanel` (file pick → account label pre-filled from filename &
+    editable → presign → PUT to S3 → poll the report; recent-imports list) +
+    `TransactionsPanel` (date-window table, signed amounts). `api.ts` typed client +
+    `accountLabelFromFilename`/`formatCents` helpers (unit-tested).
+  - **Docs:** ADR-012/013 added (index + bodies); architecture bumped to **v1.4** (§2.4 key
+    formula + `IMPORT#.accountLabel`).
 
 ### Slice 5 — AI categorization pipeline + eval harness ⬜ ⚠
 
@@ -400,3 +439,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.6 | 2026-07-15 | Slice 2 ✅ deployed (OIDC deploy pipeline + prod promotion). ADR-011 added. `Ledgerly-cicd` + `Ledgerly-prod` stacks created; reusable `checks.yml`; moto + vitest tests close the Dependabot-wave coverage gap. Both exit criteria verified end-to-end (dev auto-deploy, prod on manual approval) |
 | 0.7 | 2026-07-17 | Slice 3 🔨 code-complete, PR open (categories CRUD + settings cadence UI + `core/cycles.py` engine, 69 backend/5 frontend tests). Deploy via pipeline on merge (Option A — no workstation deploy), so deploy/smoke-test exit criteria stay open until then. `/code-review medium` trialled and adopted as advisory step 3 of `/wrap-slice`. No new ADR (design covered by architecture §2.4/§2.6) |
 | 0.8 | 2026-07-19 | Slice 3 ✅ deployed (dev + prod via pipeline on merge of #21). All exit criteria met: owner smoke-tested dev, unauth/bad-token → 401 verified. Next: Slice 4 — CSV import (needs owner's sample bank CSVs at start) |
+| 0.9 | 2026-07-19 | Slice 4 🔨 code-complete: CSV import end-to-end (presigned upload → S3 → import Lambda → transactions), FR-2.1–2.5. ADR-012 (natural key incl. balance) + ADR-013 (account label at upload) recorded from the owner's real Chase exports; architecture → v1.4. New `IngestConstruct`; 124 backend + 13 frontend tests. Deploy + live smoke-test via pipeline on merge (Option A) — those exit criteria stay open until then |

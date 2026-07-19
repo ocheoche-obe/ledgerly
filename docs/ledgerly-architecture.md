@@ -1,8 +1,8 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-19
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
 > significant choice recorded here has a matching ADR in `ledgerly-adl.md`
@@ -245,8 +245,8 @@ User (Cognito sub) 1 ──── 1 Settings
 | Settings | `PROFILE` | cadence config incl. `effectiveFrom` history |
 | Category | `CAT#<ulid>` | `name`, `status: active\|archived`, `sortOrder` |
 | Budget | `BUDGET#<cycleId>#<categoryId>` | `amountCents`; cycle-major so one Query gets a whole cycle |
-| Transaction | `TXN#<date>#<txnId>` | date `YYYY-MM-DD`; `txnId = sha256(accountId·date·amountCents·rawDescription)[:16]` → dedupe is key-equality |
-| Import | `IMPORT#<isoTimestamp>#<ulid>` | counts added/duplicate/failed, status, filename |
+| Transaction | `TXN#<date>#<txnId>` | date `YYYY-MM-DD`; `txnId = sha256(accountId·date·amountCents·rawDescription·balanceCents)[:16]` → dedupe is key-equality (balance included per ADR-012 so legit same-day/-amount/-merchant charges aren't collapsed) |
+| Import | `IMPORT#<isoTimestamp>#<ulid>` | counts added/duplicate/failed, status, filename, `accountLabel` (owner-confirmed at upload, ADR-013) |
 | File hash | `FILEHASH#<sha256>` | conditional put = file-level idempotency (AP 12) |
 | Merchant rule | `RULE#<normalizedMerchant>` | `categoryId`, `source: correction`, `hitCount`, `updatedAt` |
 
@@ -562,3 +562,4 @@ resolves it.)*
 | 1.1 | 2026-07-13 | Owner review feedback: added rendered AWS-style architecture diagram (diagrams-as-code via `render_architecture.py` → PNG/PDF in docs/); §1.1 now treats the rendered diagram as canonical for human review, ASCII as quick reference. |
 | 1.2 | 2026-07-14 | Slice-1 implementation correction (no design change): §5.2 repository layout — AWS SDK code (DynamoDB repo, Bedrock `Categorizer` impl) moved from `core/` to a new `backend/adapters/` seam so `core/` stays genuinely AWS-import-free; `.github/` layout updated. |
 | 1.3 | 2026-07-15 | Slice-2 deployment story realized (no design change): §5.4 links ADR-011 — GitHub OIDC deploy role is narrow (assumes CDK bootstrap roles only), `prod` gated by a GitHub Environment required reviewer. |
+| 1.4 | 2026-07-19 | Slice-4 data-model refinement from real Chase exports: §2.4 transaction natural key now includes `balanceCents` (ADR-012) so legitimate same-day/-amount/-merchant charges aren't silently deduped; `IMPORT#` carries an owner-confirmed `accountLabel` (ADR-013). No change to the dedupe *mechanism* (content-hash key-equality + `FILEHASH#`). |

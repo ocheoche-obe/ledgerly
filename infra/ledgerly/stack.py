@@ -1,10 +1,11 @@
 """LedgerlyStack — one stack per stage, composed of constructs (architecture §5.1).
 
-Slice 1 (walking skeleton) wires five of the seven planned constructs: Data, Auth, Api,
-Web, Ops. Ingest and Categorization arrive in their own slices (4 and 5).
+Slice 1 (walking skeleton) wired five constructs: Data, Auth, Api, Web, Ops. Slice 4 adds
+Ingest (CSV upload bucket + import Lambda). Categorization arrives in Slice 5.
 
 Construct order matters — it keeps CloudFormation dependencies acyclic:
-  Data → Web(bucket+CDN) → Auth(callback URLs need the site URL) → Api(needs Auth+Data)
+  Data → Web(bucket+CDN) → Auth(callback URLs need the site URL) → Ingest(needs table +
+  SPA origins for bucket CORS) → Api(needs Auth+Data+Ingest bucket)
   → Web.deploy_spa(runtime config needs Auth+Api) → Ops.
 """
 import aws_cdk as cdk
@@ -15,6 +16,7 @@ from ledgerly.config import StageConfig
 from ledgerly.constructs.api import ApiConstruct
 from ledgerly.constructs.auth import AuthConstruct
 from ledgerly.constructs.data import DataConstruct
+from ledgerly.constructs.ingest import IngestConstruct
 from ledgerly.constructs.ops import OpsConstruct
 from ledgerly.constructs.web import WebConstruct
 
@@ -36,11 +38,21 @@ class LedgerlyStack(Stack):
         allowed_origins = [web.site_url]
         if stage.name == "dev":
             allowed_origins.append("http://localhost:5173")
+        # Ingest owns the upload bucket (CORS scoped to the SPA origin[s]) + the import Lambda;
+        # the API needs the bucket to mint presigned upload URLs.
+        ingest = IngestConstruct(
+            self,
+            "Ingest",
+            stage=stage,
+            table=data.table,
+            allowed_origins=allowed_origins,
+        )
         api = ApiConstruct(
             self,
             "Api",
             stage=stage,
             table=data.table,
+            upload_bucket=ingest.bucket,
             user_pool=auth.user_pool,
             user_pool_client=auth.user_pool_client,
             allowed_origins=allowed_origins,
@@ -61,3 +73,4 @@ class LedgerlyStack(Stack):
         cdk.CfnOutput(self, "UserPoolId", value=auth.user_pool.user_pool_id)
         cdk.CfnOutput(self, "UserPoolClientId", value=auth.user_pool_client.user_pool_client_id)
         cdk.CfnOutput(self, "TableName", value=data.table.table_name)
+        cdk.CfnOutput(self, "UploadBucket", value=ingest.bucket.bucket_name)
