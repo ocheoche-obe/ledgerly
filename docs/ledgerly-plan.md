@@ -76,7 +76,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
 | 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
-| 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | 🔨 code-complete, PR open | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
+| 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
@@ -233,12 +233,15 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   owner during the slice (low stakes, fully editable).
 - **Exit criteria:** ☑ cycle engine unit tests cover both cadences + transitions (20 tests:
   month boundaries, biweekly anchor/phase-lock, monthly↔biweekly transitions) ☑ docs current
-  ☐ categories + settings manageable in deployed app *(pending pipeline deploy on merge)*
-  ☐ deployed via pipeline *(pending merge — Option A, no workstation deploy)*.
-- **Completion notes:** _Code-complete; PR open. Deploy + browser smoke-test happen when the
-  PR merges (the Slice-2 pipeline auto-deploys `dev`), keeping "no workstation deploys"
-  intact — this is why the last two exit criteria are still open. `cdk diff` reviewed pre-PR
-  (new `CategoriesFn` + 4 routes + CORS POST/PATCH; all table-scoped least-privilege)._
+  ☑ categories + settings manageable in deployed app (owner smoke-test: login → starter set
+  present → created a category → cadence monthly→two-week) ☑ deployed via pipeline.
+- **Completion notes:** _Deployed to `dev` **and** `prod` via the pipeline on merge of #21
+  (run 29675341086 — `deploy-dev` + `deploy-prod` both success), keeping "no workstation
+  deploys" intact (Option A; a workstation `cdk deploy` was also blocked by the auto-mode
+  classifier, which aligned with the convention). Owner smoke-tested `dev` in-browser; unauth
+  + bad-token requests to `/categories` and `PATCH /settings` verified → 401. `cdk diff`
+  reviewed pre-PR (new `CategoriesFn` + 4 routes + CORS POST/PATCH; all table-scoped
+  least-privilege)._
   - **Cycle engine (`core/cycles.py`)** — the heart of the slice, pure/AWS-free. Cycle IDs
     (`M#…`/`B#…`) + windows derived from the settings `cadences[]` history; windows are
     **clamped** to each cadence's span so no cycle straddles a cadence change (the transition
@@ -396,3 +399,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.5 | 2026-07-14 | Slice 1 ✅ deployed to dev (walking skeleton, all exit criteria met). ADR-010 (dedicated account) added. CI/CodeQL/Dependabot + AWS account guard landed ahead of roadmap; Slice 2 narrowed to the deploy pipeline. Slice-1 security review's deferred items folded into Slice 8 |
 | 0.6 | 2026-07-15 | Slice 2 ✅ deployed (OIDC deploy pipeline + prod promotion). ADR-011 added. `Ledgerly-cicd` + `Ledgerly-prod` stacks created; reusable `checks.yml`; moto + vitest tests close the Dependabot-wave coverage gap. Both exit criteria verified end-to-end (dev auto-deploy, prod on manual approval) |
 | 0.7 | 2026-07-17 | Slice 3 🔨 code-complete, PR open (categories CRUD + settings cadence UI + `core/cycles.py` engine, 69 backend/5 frontend tests). Deploy via pipeline on merge (Option A — no workstation deploy), so deploy/smoke-test exit criteria stay open until then. `/code-review medium` trialled and adopted as advisory step 3 of `/wrap-slice`. No new ADR (design covered by architecture §2.4/§2.6) |
+| 0.8 | 2026-07-19 | Slice 3 ✅ deployed (dev + prod via pipeline on merge of #21). All exit criteria met: owner smoke-tested dev, unauth/bad-token → 401 verified. Next: Slice 4 — CSV import (needs owner's sample bank CSVs at start) |

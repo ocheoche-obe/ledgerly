@@ -145,25 +145,26 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 3 — Categories, settings & budget-cycle engine: 🔨 code-complete, PR open (2026-07-17).
-Deploys to `dev` via the pipeline on merge (Option A — no workstation deploy), then browser
-smoke-test. Once verified + merged, flip the plan board to ✅ and update this marker.**
+**Slice 3 — Categories, settings & budget-cycle engine: complete & deployed (2026-07-19),
+PR [#21] merged (dev + prod). Next: Slice 4 — CSV import end-to-end (needs the owner's sample
+bank CSV exports at slice start — see plan Slice 4 ⚠).**
 
-- In progress: Slice 3 — `core/cycles.py` budget-cycle engine (cycle IDs/windows from the
+- Last completed: Slice 3 — `core/cycles.py` budget-cycle engine (cycle IDs/windows from the
   cadence history, clamped so no cycle straddles a change; change-effective-next-cycle,
   FR-4.2); categories CRUD + starter set (FR-4.1/4.4); settings cadence UI. 69 backend + 5
-  frontend tests, ruff clean, `/security-review` clean. **Deploy pending merge** (the last
-  two exit criteria stay open until the pipeline deploys `dev`). `/code-review` adopted into
-  `/wrap-slice` as an advisory step. No new ADR (design covered by architecture §2.4/§2.6).
-- Last completed: Slice 2 — GitHub OIDC deploy pipeline (ADR-011). Push to `main` runs the
+  frontend tests. Deployed dev + prod via the pipeline on merge; owner smoke-tested dev,
+  unauth/bad-token → 401 verified. `/code-review` adopted into `/wrap-slice` as an advisory
+  step. No new ADR (design covered by architecture §2.4/§2.6). **Frontend is intentionally
+  basic** (inline styles) — a visual pass is deferred; functionality-first for now.
+- Prior: Slice 2 — GitHub OIDC deploy pipeline (ADR-011). Push to `main` runs the
   reusable `checks.yml` gate → auto-deploys `dev` → `prod` promotes on manual approval
   (GitHub Environment `prod`, owner = required reviewer). Zero long-lived AWS keys: a narrow
   `ledgerly-github-deploy` role only assumes the CDK bootstrap roles. New stacks:
   `Ledgerly-cicd` (OIDC provider + role, deployed once by hand) and `Ledgerly-prod`
   (deletion + termination protection on).
-- Prior: Slice 1 — deployed dev end-to-end (Cognito Hosted-UI/PKCE login → HTTP API JWT
-  authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live); billing alarm;
-  unauth → 401; CI/CodeQL/Dependabot + AWS account guard (ADR-010) landed ahead of roadmap.
+- Earlier: Slice 1 — walking skeleton deployed dev end-to-end (Cognito Hosted-UI/PKCE login →
+  HTTP API JWT authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live);
+  billing alarm; CI/CodeQL/Dependabot + AWS account guard (ADR-010) landed ahead of roadmap.
 - Architecture (unchanged design): approved v1.1 → doc bumped to v1.2 (Slice-1 layout
   correction: AWS persistence lives in `backend/adapters/`, keeping `core/` AWS-free).
   ADR-001…011 Accepted.
