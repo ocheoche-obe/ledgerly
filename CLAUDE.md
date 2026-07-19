@@ -77,23 +77,31 @@ and `infra/app.py` pins the account so a wrong-account `cdk deploy` fails fast.
 _Seeded in Slice 1 (walking skeleton); grows per slice._
 
 - **`backend/core/`** — pure domain logic, **no AWS imports** (portability seam + unit-test
-  surface). `settings.py`: default monthly PROFILE + owner-facing projection.
+  surface). `settings.py`: default monthly PROFILE + projection. `cycles.py`: budget-cycle
+  engine (FR-4.2) — cycle IDs/windows derived from the cadence history, clamped so no cycle
+  straddles a cadence change; `plan_cadence_change` = change-effective-next-cycle.
+  `categories.py`: category shape/validation + starter set (FR-4.4). `ids.py`: stdlib ULID
+  (no runtime deps — the Lambda asset has no `pip` step).
 - **`backend/adapters/`** — AWS-facing persistence (boto3). `dynamo.py`:
-  `get_or_create_settings` (AP #1 — idempotent create-on-first-read).
-- **`backend/functions/api_settings/handler.py`** — `GET /settings` Lambda; identity from
-  verified JWT claims only (FR-1.3).
+  `get_or_create_settings` (AP #1), `update_cadence` (FR-4.2), `list/create/update_category`
+  (AP #2/#3, starters seeded once on first list).
+- **`backend/functions/api_settings/handler.py`** — `GET`/`PATCH /settings` Lambda (returns
+  the live current cycle); `backend/functions/api_categories/handler.py` — `GET`/`POST
+  /categories` + `PATCH /categories/{id}`. Both: identity from verified JWT claims only (FR-1.3).
 - **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
   constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
-  Hosted-UI/PKCE client + owner user), `Api` (HTTP API + JWT authorizer + settings Lambda,
-  least-privilege role), `Web` (private S3 + CloudFront + runtime `config.json`), `Ops` (AWS
+  Hosted-UI/PKCE client + owner user), `Api` (HTTP API + JWT authorizer + settings &
+  categories Lambdas via a shared `_api_lambda` helper, each with a least-privilege
+  table-scoped role), `Web` (private S3 + CloudFront + runtime `config.json`), `Ops` (AWS
   Budgets billing alarm). Ingest + Categorization arrive in Slices 4–5. Separately,
   `LedgerlyCicdStack` (`Ledgerly-cicd`, account-global, deployed once) = `Cicd` construct:
   GitHub OIDC provider + narrow `ledgerly-github-deploy` role (ADR-011).
 - **`.github/` (CI/CD)** — `checks.yml` (reusable test/lint/synth gate) called by `ci.yml`
   (PRs) and `deploy.yml` (push to `main` → deploy `dev`, then manual-approved `prod` via the
   `cdk-deploy` composite action); `codeql.yml` (SAST); `dependabot.yml`.
-- **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`,
-  calls `GET /settings`, renders the round-trip result.
+- **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`.
+  `api.ts` = typed client (bearer token on every call). `SettingsPanel` = cadence + current
+  cycle; `CategoriesPanel` = category CRUD; `styles.ts` = shared inline styles.
 
 ## Repository layout
 
@@ -122,6 +130,9 @@ _Solidified at the end of Slice 1. Binding:_
   `npm run build`/`test` (frontend). CI runs all on PR (`.github/workflows/ci.yml`).
 - **Security gate:** `/security-review` is a blocking pre-commit step every slice; CodeQL +
   Dependabot are the remote net on PRs.
+- **Code review:** `/code-review medium` runs at `/wrap-slice` (step 3) as an **advisory**
+  (non-blocking) correctness pass — adopted Slice 3 after a trial found real bugs CI + tests
+  + security-review missed. Triage findings; a false positive never blocks a slice.
 
 ## Cost constraints
 
@@ -134,16 +145,22 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 2 — CI/CD deploy pipeline: complete & deployed (2026-07-15), PR [#19] merged.
-Next: Slice 3 — Categories, settings & budget-cycle engine.**
+**Slice 3 — Categories, settings & budget-cycle engine: 🔨 code-complete, PR open (2026-07-17).
+Deploys to `dev` via the pipeline on merge (Option A — no workstation deploy), then browser
+smoke-test. Once verified + merged, flip the plan board to ✅ and update this marker.**
 
+- In progress: Slice 3 — `core/cycles.py` budget-cycle engine (cycle IDs/windows from the
+  cadence history, clamped so no cycle straddles a change; change-effective-next-cycle,
+  FR-4.2); categories CRUD + starter set (FR-4.1/4.4); settings cadence UI. 69 backend + 5
+  frontend tests, ruff clean, `/security-review` clean. **Deploy pending merge** (the last
+  two exit criteria stay open until the pipeline deploys `dev`). `/code-review` adopted into
+  `/wrap-slice` as an advisory step. No new ADR (design covered by architecture §2.4/§2.6).
 - Last completed: Slice 2 — GitHub OIDC deploy pipeline (ADR-011). Push to `main` runs the
   reusable `checks.yml` gate → auto-deploys `dev` → `prod` promotes on manual approval
   (GitHub Environment `prod`, owner = required reviewer). Zero long-lived AWS keys: a narrow
   `ledgerly-github-deploy` role only assumes the CDK bootstrap roles. New stacks:
   `Ledgerly-cicd` (OIDC provider + role, deployed once by hand) and `Ledgerly-prod`
-  (deletion + termination protection on). Test scaffolding closed the Dependabot-wave gap:
-  moto adapter tests + a vitest `App` smoke test. Both exit criteria verified end-to-end.
+  (deletion + termination protection on).
 - Prior: Slice 1 — deployed dev end-to-end (Cognito Hosted-UI/PKCE login → HTTP API JWT
   authorizer → `GET /settings` Lambda → DynamoDB round-trip, verified live); billing alarm;
   unauth → 401; CI/CodeQL/Dependabot + AWS account guard (ADR-010) landed ahead of roadmap.

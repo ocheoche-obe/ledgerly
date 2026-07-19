@@ -76,7 +76,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | P1 | Architecture design + foundational ADRs | — | ✅ complete (architecture v1.1 + slice roadmap approved 2026-07-13) | — |
 | 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
-| 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ⬜ | — |
+| 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | 🔨 code-complete, PR open | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ⬜ ⚠ | — |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
@@ -231,9 +231,39 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   completes FR-4.5).
 - **⚠ Open decisions:** starter category list contents — proposed default brought to
   owner during the slice (low stakes, fully editable).
-- **Exit criteria:** ☐ categories + settings manageable in deployed app ☐ cycle engine
-  unit tests cover both cadences + transitions ☐ deployed via pipeline ☐ docs current.
-- **Completion notes:** _—_
+- **Exit criteria:** ☑ cycle engine unit tests cover both cadences + transitions (20 tests:
+  month boundaries, biweekly anchor/phase-lock, monthly↔biweekly transitions) ☑ docs current
+  ☐ categories + settings manageable in deployed app *(pending pipeline deploy on merge)*
+  ☐ deployed via pipeline *(pending merge — Option A, no workstation deploy)*.
+- **Completion notes:** _Code-complete; PR open. Deploy + browser smoke-test happen when the
+  PR merges (the Slice-2 pipeline auto-deploys `dev`), keeping "no workstation deploys"
+  intact — this is why the last two exit criteria are still open. `cdk diff` reviewed pre-PR
+  (new `CategoriesFn` + 4 routes + CORS POST/PATCH; all table-scoped least-privilege)._
+  - **Cycle engine (`core/cycles.py`)** — the heart of the slice, pure/AWS-free. Cycle IDs
+    (`M#…`/`B#…`) + windows derived from the settings `cadences[]` history; windows are
+    **clamped** to each cadence's span so no cycle straddles a cadence change (the transition
+    cycle is just shorter, natural ID preserved). `plan_cadence_change` sets `effectiveFrom`
+    at a future boundary so a change never rewrites the current/past cycles (FR-4.2). The
+    **earliest cadence extends backward indefinitely** so back-dated CSV imports (Slice 4)
+    still map to a cycle — this was a real bug the tests caught (clamp produced start>end).
+  - **Categories (`core/categories.py` + adapter)** — CRUD (create/rename/archive), starter
+    set seeded once on first `GET /categories`. Archive only flips status this slice;
+    reassignment (FR-4.5) is Slice 7.
+  - **Implementation calls (no ADR needed — covered by architecture §2.4/§2.6):**
+    (1) **Hand-rolled ULID** (`core/ids.py`, stdlib-only) rather than a package — the Lambda
+    asset ships as a plain source tree with no `pip install` step, so adding a dep would need
+    a layer/vendoring; keeps the zero-runtime-deps posture. (2) **One method-routed Lambda
+    per resource** (`SettingsFn` handles GET+PATCH; `CategoriesFn` handles GET/POST/PATCH).
+    (3) `GET /settings` now also returns the **live current cycle** (engine-derived) so the
+    SPA needs no date math and the engine is exercised in the deployed app.
+  - **Code review adopted into cadence.** Ran `/code-review medium` as a trial this slice; it
+    found 2 real correctness bugs (non-object `cadence` → 500 not 400; starter-seed flag set
+    before the batch write → a crash could strand the owner with no categories) + 2 minor
+    (stale-token = the known Slice-8 item; settings panel pre-filling a *scheduled* cadence).
+    Fixed 1/2/4; #3 deferred to Slice 8. Zero false positives at `medium`. Now an **advisory
+    (non-blocking) step 3 in `/wrap-slice`**.
+  - **Tests:** 69 backend (cycle engine 20, categories/ids 15, adapter + handler integration
+    via moto) + 5 frontend (api client + smoke). ruff clean; `/security-review` no findings.
 
 ### Slice 4 — CSV import end-to-end ⬜ ⚠
 
@@ -365,3 +395,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.4 | 2026-07-13 | Slice roadmap owner-approved; P1 marked complete. Diagram-as-code skill removed from the plan — it's a portable side deliverable for the project-starter kit, not Ledgerly scope |
 | 0.5 | 2026-07-14 | Slice 1 ✅ deployed to dev (walking skeleton, all exit criteria met). ADR-010 (dedicated account) added. CI/CodeQL/Dependabot + AWS account guard landed ahead of roadmap; Slice 2 narrowed to the deploy pipeline. Slice-1 security review's deferred items folded into Slice 8 |
 | 0.6 | 2026-07-15 | Slice 2 ✅ deployed (OIDC deploy pipeline + prod promotion). ADR-011 added. `Ledgerly-cicd` + `Ledgerly-prod` stacks created; reusable `checks.yml`; moto + vitest tests close the Dependabot-wave coverage gap. Both exit criteria verified end-to-end (dev auto-deploy, prod on manual approval) |
+| 0.7 | 2026-07-17 | Slice 3 🔨 code-complete, PR open (categories CRUD + settings cadence UI + `core/cycles.py` engine, 69 backend/5 frontend tests). Deploy via pipeline on merge (Option A — no workstation deploy), so deploy/smoke-test exit criteria stay open until then. `/code-review medium` trialled and adopted as advisory step 3 of `/wrap-slice`. No new ADR (design covered by architecture §2.4/§2.6) |

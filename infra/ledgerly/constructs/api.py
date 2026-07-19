@@ -1,9 +1,14 @@
-"""ApiConstruct — HTTP API + Cognito JWT authorizer + the GET /settings Lambda (ADR-007).
+"""ApiConstruct — HTTP API + Cognito JWT authorizer + the application Lambdas (ADR-007).
 
-Slice 1 exposes a single authenticated route. The JWT authorizer rejects absent/invalid
-tokens with 401 *before* any Lambda runs (architecture §3.5). The Lambda gets least-
-privilege: read/write on the one table only — nothing else, no `*` resources (NFR-4.4).
-Business identity is read from the verified JWT claims inside the handler (FR-1.3).
+Routes (all behind the JWT authorizer, which rejects absent/invalid tokens with 401 *before*
+any Lambda runs — architecture §3.5):
+  GET/PATCH /settings        → settings Lambda (cadence config + live current cycle, FR-4.2)
+  GET/POST  /categories      → categories Lambda (list/create, FR-4.1/4.4)
+  PATCH     /categories/{id} → categories Lambda (rename/archive, FR-4.1)
+
+Each Lambda gets least privilege: read/write on the one table only — nothing else, no `*`
+resources (NFR-4.4). Business identity is read from the verified JWT claims inside each
+handler (FR-1.3).
 """
 from pathlib import Path
 
@@ -42,32 +47,20 @@ class ApiConstruct(Construct):
     ):
         super().__init__(scope, construct_id)
 
-        log_group = logs.LogGroup(
-            self,
-            "SettingsFnLogs",
-            retention=_RETENTION.get(stage.log_retention_days, logs.RetentionDays.ONE_MONTH),
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-
-        settings_fn = _lambda.Function(
-            self,
+        settings_fn = self._api_lambda(
             "SettingsFn",
+            stage=stage,
+            table=table,
             function_name=f"ledgerly-{stage.name}-api-settings",
-            runtime=_lambda.Runtime.PYTHON_3_13,
             handler="functions.api_settings.handler.handler",
-            code=_lambda.Code.from_asset(
-                str(_BACKEND_DIR),
-                exclude=["tests", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
-            ),
-            timeout=Duration.seconds(10),  # API λ budget (architecture §4.6)
-            memory_size=256,
-            environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO"},
-            log_group=log_group,
-            tracing=_lambda.Tracing.ACTIVE,
         )
-        # Least privilege: this Lambda touches exactly one table, read + write (AP #1 creates
-        # the PROFILE item on first call). No other grants.
-        table.grant_read_write_data(settings_fn)
+        categories_fn = self._api_lambda(
+            "CategoriesFn",
+            stage=stage,
+            table=table,
+            function_name=f"ledgerly-{stage.name}-api-categories",
+            handler="functions.api_categories.handler.handler",
+        )
 
         authorizer = authorizers.HttpUserPoolAuthorizer(
             "SettingsAuthorizer",
@@ -81,17 +74,71 @@ class ApiConstruct(Construct):
             api_name=f"ledgerly-{stage.name}",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=allowed_origins,  # explicit origins — never "*"
-                allow_methods=[apigwv2.CorsHttpMethod.GET, apigwv2.CorsHttpMethod.OPTIONS],
+                allow_methods=[
+                    apigwv2.CorsHttpMethod.GET,
+                    apigwv2.CorsHttpMethod.POST,
+                    apigwv2.CorsHttpMethod.PATCH,
+                    apigwv2.CorsHttpMethod.OPTIONS,
+                ],
                 allow_headers=["authorization", "content-type"],
                 max_age=Duration.days(1),
             ),
         )
         self.http_api.add_routes(
             path="/settings",
-            methods=[apigwv2.HttpMethod.GET],
+            methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH],
             integration=integrations.HttpLambdaIntegration("SettingsIntegration", settings_fn),
             authorizer=authorizer,
         )
+        self.http_api.add_routes(
+            path="/categories",
+            methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+            integration=integrations.HttpLambdaIntegration("CategoriesIntegration", categories_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/categories/{id}",
+            methods=[apigwv2.HttpMethod.PATCH],
+            integration=integrations.HttpLambdaIntegration(
+                "CategoriesItemIntegration", categories_fn
+            ),
+            authorizer=authorizer,
+        )
+
+    def _api_lambda(
+        self,
+        construct_id: str,
+        *,
+        stage: StageConfig,
+        table: ddb.ITable,
+        function_name: str,
+        handler: str,
+    ) -> _lambda.Function:
+        """A least-privilege API Lambda: read/write on the one table, nothing else (NFR-4.4)."""
+        log_group = logs.LogGroup(
+            self,
+            f"{construct_id}Logs",
+            retention=_RETENTION.get(stage.log_retention_days, logs.RetentionDays.ONE_MONTH),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        fn = _lambda.Function(
+            self,
+            construct_id,
+            function_name=function_name,
+            runtime=_lambda.Runtime.PYTHON_3_13,
+            handler=handler,
+            code=_lambda.Code.from_asset(
+                str(_BACKEND_DIR),
+                exclude=["tests", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
+            ),
+            timeout=Duration.seconds(10),  # API λ budget (architecture §4.6)
+            memory_size=256,
+            environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO"},
+            log_group=log_group,
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+        table.grant_read_write_data(fn)
+        return fn
 
     @property
     def api_url(self) -> str:

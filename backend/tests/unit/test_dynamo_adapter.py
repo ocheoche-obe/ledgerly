@@ -74,3 +74,90 @@ def test_distinct_users_get_distinct_profiles(dynamo):
     scan = dynamo._table.scan()["Items"]
     pks = {item["pk"] for item in scan}
     assert pks == {"USER#sub-a", "USER#sub-b"}
+
+
+# --- categories (FR-4.1 / FR-4.4) ------------------------------------------------------
+
+def test_first_list_seeds_starter_categories(dynamo):
+    from core.categories import STARTER_CATEGORIES
+
+    cats = dynamo.list_categories("sub-1")
+    assert [c["name"] for c in cats] == list(STARTER_CATEGORIES)
+    assert all(c["status"] == "active" for c in cats)
+    # sortOrder came back as a plain int (Decimal would break JSON serialization).
+    assert all(isinstance(c["sortOrder"], int) for c in cats)
+
+
+def test_starter_seed_is_idempotent(dynamo):
+    first = dynamo.list_categories("sub-1")
+    second = dynamo.list_categories("sub-1")
+    assert first == second  # no duplicate seeding on a second load
+
+
+def test_starters_not_reseeded_after_deletion(dynamo):
+    dynamo.list_categories("sub-1")  # seeds
+    # Simulate the owner archiving everything, then deleting one — the seed flag stays set.
+    cats = dynamo.list_categories("sub-1")
+    dynamo._table.delete_item(
+        Key={"pk": "USER#sub-1", "sk": f"CAT#{cats[0]['categoryId']}"}
+    )
+    remaining = dynamo.list_categories("sub-1")
+    assert len(remaining) == len(cats) - 1  # not re-seeded back to full
+
+
+def test_create_category_appends_after_starters(dynamo):
+    starters = dynamo.list_categories("sub-1")
+    created = dynamo.create_category("sub-1", "  Coffee  ")
+
+    assert created["name"] == "Coffee"  # normalized
+    assert created["status"] == "active"
+    assert created["sortOrder"] == len(starters)  # appended at the end
+
+
+def test_create_category_rejects_blank_name(dynamo):
+    dynamo.list_categories("sub-1")
+    with pytest.raises(ValueError, match="must not be empty"):
+        dynamo.create_category("sub-1", "   ")
+
+
+def test_rename_and_archive_category(dynamo):
+    created = dynamo.create_category("sub-1", "Coffe")
+    cid = created["categoryId"]
+
+    renamed = dynamo.update_category("sub-1", cid, name="Coffee")
+    assert renamed["name"] == "Coffee"
+
+    archived = dynamo.update_category("sub-1", cid, status="archived")
+    assert archived["status"] == "archived"
+    assert archived["name"] == "Coffee"  # rename persisted
+
+
+def test_update_missing_category_returns_none(dynamo):
+    assert dynamo.update_category("sub-1", "does-not-exist", name="X") is None
+
+
+def test_update_rejects_bad_status(dynamo):
+    created = dynamo.create_category("sub-1", "Coffee")
+    with pytest.raises(ValueError, match="status must be"):
+        dynamo.update_category("sub-1", created["categoryId"], status="deleted")
+
+
+# --- cadence change (FR-4.2) -----------------------------------------------------------
+
+def test_update_cadence_to_biweekly_appends_history(dynamo):
+    dynamo.get_or_create_settings("sub-1")  # default monthly
+    view = dynamo.update_cadence("sub-1", kind="biweekly", anchor="2099-01-08")
+
+    assert len(view["cadences"]) == 2
+    latest = view["cadences"][-1]
+    assert latest["kind"] == "biweekly"
+    assert latest["anchor"] == "2099-01-08"
+    # Persisted, not just returned.
+    raw = dynamo._table.get_item(Key={"pk": "USER#sub-1", "sk": "PROFILE"})["Item"]
+    assert len(raw["cadences"]) == 2
+
+
+def test_update_cadence_creates_profile_if_missing(dynamo):
+    # No prior GET /settings — update should still work by creating the PROFILE first.
+    view = dynamo.update_cadence("sub-1", kind="biweekly", anchor="2099-01-08")
+    assert view["cadences"][-1]["kind"] == "biweekly"

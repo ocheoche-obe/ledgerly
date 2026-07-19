@@ -19,7 +19,7 @@ session can cold-start from `CLAUDE.md` alone.
 
 Ledgerly handles banking/transaction/financial data, so a security review is part of the
 definition of done for **every** slice, not an occasional pass. This runs **before the
-commit in step 4** — it is the local pre-commit gate.
+commit in step 5** — it is the local pre-commit gate.
 
 - Run the **`/security-review`** skill over the slice's diff.
 - **Triage every finding.** Either fix it, or record an explicit, reasoned decision to
@@ -37,7 +37,23 @@ commit in step 4** — it is the local pre-commit gate.
 > is expected to stay green on the PR; if the remote net flags something new, triage it the
 > same way before merge.
 
-## 3. Bring the docs current (blocking)
+## 3. Code review — advisory correctness pass (not a gate)
+
+A second axis the security gate and CI don't cover: **logic correctness** and diff
+cleanliness. Adopted after the Slice 3 trial, which found two real bugs (a 500-instead-of-400
+crash and a seed-ordering bug that could strand the owner with no categories) that CI, the
+tests, and `/security-review` all passed clean over — with zero false positives at `medium`.
+
+- Run the **`/code-review medium`** skill over the slice's diff, after `/security-review`
+  and before the commit in step 5.
+- **This is advisory, not blocking.** Unlike `/security-review`, a finding here does not
+  block the commit — triage each one and either fix it or note why it's deferred. Correctness
+  findings need human judgment; a false positive must never be able to stop a good slice.
+- `medium` is the default effort — fewer, higher-confidence findings. Reach for `high`/`max`
+  only when a slice is unusually dense or risky (broader coverage, more uncertain findings).
+- Note in the PR body that it ran and how findings were resolved.
+
+## 4. Bring the docs current (blocking)
 
 - **`docs/ledgerly-plan.md`** — the linchpin. Flip the slice to ✅ on the status
   board (add the PR link once it exists), fill in its **Completion notes** (what shipped,
@@ -59,14 +75,14 @@ commit in step 4** — it is the local pre-commit gate.
 - **Memory** — save durable gotchas (account-level constraints, API behaviors that
   contradict docs) that future sessions need; update the memory index.
 
-## 4. Commit and push
+## 5. Commit and push
 
 - Commits follow a conventional style (`feat(infra):`, `fix(...):`, `docs:`, `test:`), each
   ending with the Co-Authored-By trailer.
 - Logical commits: infra / backend / tests / docs separated where it's natural.
 - Push the slice branch to origin.
 
-## 5. Open the PR
+## 6. Open the PR
 
 ```bash
 gh pr create --base main
@@ -75,7 +91,7 @@ gh pr create --base main
 PR body: what the slice delivers, exit criteria and how each was verified (including
 smoke-test evidence), decisions/ADRs added, doc corrections made.
 
-## 6. Hand off
+## 7. Hand off
 
 Tell the user, explicitly:
 
