@@ -96,12 +96,13 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
     it via required reviewer).
   - e2e browser tests → **Slice 6** (when the dashboard exists).
 
-### Slice 3 — Categories, settings & budget-cycle engine (2026-07-17)
-- **Met exit criteria?** Partially at PR-open: ✅ cycle-engine unit tests cover both cadences
-  + transitions (20 tests), ✅ docs current. ☐ "manageable in deployed app" + ☐ "deployed via
-  pipeline" remain open by design — Slice 3 deploys through the Slice-2 pipeline **on merge**
-  (Option A, chosen to preserve "no workstation deploys"), so the browser smoke-test is a
-  post-merge step, not a pre-PR one. `cdk diff` was reviewed pre-PR as the interim check.
+### Slice 3 — Categories, settings & budget-cycle engine (2026-07-19)
+- **Met exit criteria?** Yes — all four. Cycle-engine unit tests cover both cadences +
+  transitions (20 tests); docs current; categories + settings manageable in the deployed app
+  (owner smoke-tested `dev`: login → starter set present → created a category → cadence
+  monthly→two-week); deployed via the pipeline on merge of #21 (run 29675341086 — `deploy-dev`
+  **and** `deploy-prod` both success; unauth/bad-token → 401 verified). Deploy was **post-merge
+  by design** (Option A, preserving "no workstation deploys"); `cdk diff` was the pre-PR check.
 - **Actual cost / resource use:** no new paid service — categories/settings ride the existing
   DynamoDB table + a second small API Lambda (`CategoriesFn`). Still ~$0 MTD; well under the
   $10 ceiling (NFR-1.1).
@@ -179,3 +180,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 | 2026-07-14 | Slice 1 per-slice beat added (walking skeleton — all exit criteria met) |
 | 2026-07-15 | Slice 2 per-slice beat added (CI/CD deploy pipeline + prod promotion — all exit criteria met) |
 | 2026-07-17 | Slice 3 per-slice beat added (categories, settings & cycle engine — code-complete at PR; deploy/smoke-test post-merge via pipeline). `/code-review` adopted into `/wrap-slice` |
+| 2026-07-19 | Slice 3 beat finalized — deployed dev + prod on merge, all exit criteria met (owner smoke-test + unauth 401 verified) |
