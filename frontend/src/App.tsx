@@ -2,14 +2,28 @@ import { useEffect, useState } from "react";
 import type { User, UserManager } from "oidc-client-ts";
 import { loadConfig, type AppConfig } from "./config";
 import { makeUserManager } from "./auth";
-import { makeApi, type Api, type Category, type Settings } from "./api";
+import {
+  makeApi,
+  type Api,
+  type Category,
+  type Settings,
+  type Transaction,
+} from "./api";
 import { SettingsPanel } from "./SettingsPanel";
 import { CategoriesPanel } from "./CategoriesPanel";
+import { ImportPanel } from "./ImportPanel";
+import { TransactionsPanel } from "./TransactionsPanel";
 import { styles } from "./styles";
 
-// Slice 3: budget-cycle settings + category management on the deployed skeleton. After
-// Hosted-UI login the app loads the owner's settings (with the live current cycle) and
-// categories, then lets them manage both.
+interface TxnWindow {
+  transactions: Transaction[];
+  from: string;
+  to: string;
+}
+
+// Slice 4: CSV import end-to-end on the deployed skeleton. After Hosted-UI login the app
+// loads settings + categories (Slice 3), then lets the owner import a bank CSV and see the
+// resulting transactions land.
 export default function App() {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [mgr, setMgr] = useState<UserManager | null>(null);
@@ -17,6 +31,7 @@ export default function App() {
   const [api, setApi] = useState<Api | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [categories, setCategories] = useState<Category[] | null>(null);
+  const [txns, setTxns] = useState<TxnWindow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // 1. Load runtime config and build the auth manager.
@@ -54,18 +69,28 @@ export default function App() {
     const client = makeApi(cfg.apiUrl, user.access_token);
     setApi(client);
     setError(null);
-    Promise.all([client.getSettings(), client.listCategories()])
-      .then(([s, c]) => {
+    Promise.all([client.getSettings(), client.listCategories(), client.listTransactions()])
+      .then(([s, c, t]) => {
         setSettings(s);
         setCategories(c);
+        setTxns(t);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [cfg, user]);
+
+  // Re-fetch the transaction window after a successful import so it shows immediately.
+  const refreshTxns = () => {
+    api
+      ?.listTransactions()
+      .then(setTxns)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
 
   const login = () => mgr?.signinRedirect();
   const logout = () => {
     setSettings(null);
     setCategories(null);
+    setTxns(null);
     setApi(null);
     mgr?.signoutRedirect();
   };
@@ -73,7 +98,7 @@ export default function App() {
   return (
     <main style={styles.main}>
       <h1 style={styles.h1}>Ledgerly</h1>
-      <p style={styles.tagline}>Categories &amp; budget cycles — Slice 3</p>
+      <p style={styles.tagline}>CSV import — Slice 4</p>
 
       {error && <pre style={styles.error}>{error}</pre>}
 
@@ -107,6 +132,18 @@ export default function App() {
             />
           ) : (
             <p style={styles.muted}>Loading categories…</p>
+          )}
+
+          {api && <ImportPanel api={api} onImported={refreshTxns} onError={setError} />}
+
+          {api && txns ? (
+            <TransactionsPanel
+              transactions={txns.transactions}
+              from={txns.from}
+              to={txns.to}
+            />
+          ) : (
+            <p style={styles.muted}>Loading transactions…</p>
           )}
         </>
       )}

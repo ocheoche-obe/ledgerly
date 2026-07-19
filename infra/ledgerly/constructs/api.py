@@ -5,10 +5,14 @@ any Lambda runs — architecture §3.5):
   GET/PATCH /settings        → settings Lambda (cadence config + live current cycle, FR-4.2)
   GET/POST  /categories      → categories Lambda (list/create, FR-4.1/4.4)
   PATCH     /categories/{id} → categories Lambda (rename/archive, FR-4.1)
+  GET/POST  /imports         → imports Lambda (presigned upload + recent imports, FR-2.5)
+  GET       /imports/{id}    → imports Lambda (status polling, FR-2.5)
+  GET       /transactions    → transactions Lambda (date-window list, FR-2 / AP 6)
 
 Each Lambda gets least privilege: read/write on the one table only — nothing else, no `*`
-resources (NFR-4.4). Business identity is read from the verified JWT claims inside each
-handler (FR-1.3).
+resources (NFR-4.4). The imports Lambda additionally gets `s3:PutObject` on the upload bucket
+so the presigned URLs it mints are usable. Business identity is read from the verified JWT
+claims inside each handler (FR-1.3).
 """
 from pathlib import Path
 
@@ -20,6 +24,7 @@ from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as ddb
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
 from ledgerly.config import StageConfig
@@ -41,6 +46,7 @@ class ApiConstruct(Construct):
         *,
         stage: StageConfig,
         table: ddb.ITable,
+        upload_bucket: s3.IBucket,
         user_pool: cognito.IUserPool,
         user_pool_client: cognito.IUserPoolClient,
         allowed_origins: list[str],
@@ -61,6 +67,24 @@ class ApiConstruct(Construct):
             function_name=f"ledgerly-{stage.name}-api-categories",
             handler="functions.api_categories.handler.handler",
         )
+        transactions_fn = self._api_lambda(
+            "TransactionsFn",
+            stage=stage,
+            table=table,
+            function_name=f"ledgerly-{stage.name}-api-transactions",
+            handler="functions.api_transactions.handler.handler",
+        )
+        imports_fn = self._api_lambda(
+            "ImportsFn",
+            stage=stage,
+            table=table,
+            function_name=f"ledgerly-{stage.name}-api-imports",
+            handler="functions.api_imports.handler.handler",
+            extra_env={"UPLOAD_BUCKET": upload_bucket.bucket_name},
+        )
+        # The presigned PUT URL is signed with this Lambda's role, so the role must be able to
+        # write the object the browser uploads (least privilege: put only, no read).
+        upload_bucket.grant_put(imports_fn)
 
         authorizer = authorizers.HttpUserPoolAuthorizer(
             "SettingsAuthorizer",
@@ -104,6 +128,26 @@ class ApiConstruct(Construct):
             ),
             authorizer=authorizer,
         )
+        self.http_api.add_routes(
+            path="/imports",
+            methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+            integration=integrations.HttpLambdaIntegration("ImportsIntegration", imports_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/imports/{id}",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration("ImportsItemIntegration", imports_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/transactions",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration(
+                "TransactionsIntegration", transactions_fn
+            ),
+            authorizer=authorizer,
+        )
 
     def _api_lambda(
         self,
@@ -113,6 +157,7 @@ class ApiConstruct(Construct):
         table: ddb.ITable,
         function_name: str,
         handler: str,
+        extra_env: dict[str, str] | None = None,
     ) -> _lambda.Function:
         """A least-privilege API Lambda: read/write on the one table, nothing else (NFR-4.4)."""
         log_group = logs.LogGroup(
@@ -133,7 +178,7 @@ class ApiConstruct(Construct):
             ),
             timeout=Duration.seconds(10),  # API λ budget (architecture §4.6)
             memory_size=256,
-            environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO"},
+            environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO", **(extra_env or {})},
             log_group=log_group,
             tracing=_lambda.Tracing.ACTIVE,
         )

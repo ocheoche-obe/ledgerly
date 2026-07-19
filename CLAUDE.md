@@ -81,27 +81,42 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   engine (FR-4.2) — cycle IDs/windows derived from the cadence history, clamped so no cycle
   straddles a cadence change; `plan_cadence_change` = change-effective-next-cycle.
   `categories.py`: category shape/validation + starter set (FR-4.4). `ids.py`: stdlib ULID
-  (no runtime deps — the Lambda asset has no `pip` step).
+  (no runtime deps — the Lambda asset has no `pip` step). `csv_normalize.py`: format-keyed
+  CSV parser registry (FR-2.3; Chase-checking impl) → normalized txns + counted row errors,
+  never raises on a bad row (FR-2.5); natural key `sha256(account·date·amountCents·rawDesc·
+  balanceCents)[:16]` (ADR-012). `accounts.py`: account label→id (ADR-013). `imports.py`:
+  import record + statuses. `transactions.py`: txn item shape (all Uncategorized until Slice 5).
 - **`backend/adapters/`** — AWS-facing persistence (boto3). `dynamo.py`:
   `get_or_create_settings` (AP #1), `update_cadence` (FR-4.2), `list/create/update_category`
-  (AP #2/#3, starters seeded once on first list).
-- **`backend/functions/api_settings/handler.py`** — `GET`/`PATCH /settings` Lambda (returns
-  the live current cycle); `backend/functions/api_categories/handler.py` — `GET`/`POST
-  /categories` + `PATCH /categories/{id}`. Both: identity from verified JWT claims only (FR-1.3).
+  (AP #2/#3), plus Slice-4: `create/get/list_imports` + `set_import_status` (AP 11),
+  `claim_file` (AP 12, file idempotency — recognizes its own replay), `put_transaction`
+  (AP 7, row idempotency), `query_transactions` (AP 6). `s3.py`: presigned PUT URL +
+  `<sub>/<importId>` key round-trip (identity from the key, not client input).
+- **`backend/functions/`** — thin handlers, identity from verified JWT claims only (FR-1.3):
+  `api_settings` (`GET`/`PATCH /settings`, live cycle), `api_categories` (`GET`/`POST
+  /categories` + `PATCH /categories/{id}`), `api_imports` (`POST /imports` presign +
+  `GET /imports[/{id}]` polling), `api_transactions` (`GET /transactions?from&to`), and the
+  **S3-triggered `importer`** (parse → file/row idempotent puts → import summary; no-op on
+  redelivered terminal imports).
 - **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
   constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
-  Hosted-UI/PKCE client + owner user), `Api` (HTTP API + JWT authorizer + settings &
-  categories Lambdas via a shared `_api_lambda` helper, each with a least-privilege
-  table-scoped role), `Web` (private S3 + CloudFront + runtime `config.json`), `Ops` (AWS
-  Budgets billing alarm). Ingest + Categorization arrive in Slices 4–5. Separately,
-  `LedgerlyCicdStack` (`Ledgerly-cicd`, account-global, deployed once) = `Cicd` construct:
-  GitHub OIDC provider + narrow `ledgerly-github-deploy` role (ADR-011).
+  Hosted-UI/PKCE client + owner user), `Ingest` (private SSE-S3 upload bucket: TLS-only,
+  30-day object expiry, CORS scoped to the SPA origin[s]; import Lambda; S3→Lambda
+  notification on `.csv`), `Api` (HTTP API + JWT authorizer + settings/categories/imports/
+  transactions Lambdas via a shared `_api_lambda` helper, each table-scoped least-privilege;
+  imports Lambda also gets `s3:PutObject` on the bucket), `Web` (private S3 + CloudFront +
+  runtime `config.json`), `Ops` (AWS Budgets billing alarm). Categorization (SQS) arrives in
+  Slice 5. Separately, `LedgerlyCicdStack` (`Ledgerly-cicd`, account-global, deployed once) =
+  `Cicd` construct: GitHub OIDC provider + narrow `ledgerly-github-deploy` role (ADR-011).
 - **`.github/` (CI/CD)** — `checks.yml` (reusable test/lint/synth gate) called by `ci.yml`
   (PRs) and `deploy.yml` (push to `main` → deploy `dev`, then manual-approved `prod` via the
   `cdk-deploy` composite action); `codeql.yml` (SAST); `dependabot.yml`.
 - **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`.
-  `api.ts` = typed client (bearer token on every call). `SettingsPanel` = cadence + current
-  cycle; `CategoriesPanel` = category CRUD; `styles.ts` = shared inline styles.
+  `api.ts` = typed client (bearer token on every call) + `accountLabelFromFilename`/
+  `formatCents` helpers. `SettingsPanel` = cadence + current cycle; `CategoriesPanel` =
+  category CRUD; `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
+  recent imports; `TransactionsPanel` = date-window transaction table; `styles.ts` = shared
+  inline styles.
 
 ## Repository layout
 
@@ -145,17 +160,25 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 3 — Categories, settings & budget-cycle engine: complete & deployed (2026-07-19),
-PR [#21] merged (dev + prod). Next: Slice 4 — CSV import end-to-end (needs the owner's sample
-bank CSV exports at slice start — see plan Slice 4 ⚠).**
+**Slice 4 — CSV import end-to-end: code-complete on branch `feat/slice4-csv-import`
+(2026-07-19); deploy + live smoke-test happen via the pipeline on merge (Option A, no
+workstation deploy). Next after merge: Slice 5 — AI categorization pipeline + eval harness.**
 
+- In progress: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions, FR-2.1–2.5.
+  New `IngestConstruct` (upload bucket + S3-triggered importer); `core/csv_normalize.py`
+  format-keyed parser (Chase checking); three-level idempotency (file hash / row natural key /
+  S3 redelivery). Two ADRs from the owner's real Chase exports: **ADR-012** (natural key
+  includes `balanceCents` so legit same-day/-amount/-merchant charges aren't collapsed) +
+  **ADR-013** (owner-confirmed account label at upload). Architecture → v1.4. 124 backend +
+  13 frontend tests; ruff clean; synth green (dev + prod). Everything lands **Uncategorized**
+  (categorization is Slice 5). **Frontend stays intentionally basic** (inline styles) — visual
+  pass still deferred.
 - Last completed: Slice 3 — `core/cycles.py` budget-cycle engine (cycle IDs/windows from the
   cadence history, clamped so no cycle straddles a change; change-effective-next-cycle,
   FR-4.2); categories CRUD + starter set (FR-4.1/4.4); settings cadence UI. 69 backend + 5
-  frontend tests. Deployed dev + prod via the pipeline on merge; owner smoke-tested dev,
-  unauth/bad-token → 401 verified. `/code-review` adopted into `/wrap-slice` as an advisory
-  step. No new ADR (design covered by architecture §2.4/§2.6). **Frontend is intentionally
-  basic** (inline styles) — a visual pass is deferred; functionality-first for now.
+  frontend tests. Deployed dev + prod via the pipeline on merge (PR #21); owner smoke-tested
+  dev, unauth/bad-token → 401 verified. `/code-review` adopted into `/wrap-slice` as an
+  advisory step. No new ADR (design covered by architecture §2.4/§2.6).
 - Prior: Slice 2 — GitHub OIDC deploy pipeline (ADR-011). Push to `main` runs the
   reusable `checks.yml` gate → auto-deploys `dev` → `prod` promotes on manual approval
   (GitHub Environment `prod`, owner = required reviewer). Zero long-lived AWS keys: a narrow

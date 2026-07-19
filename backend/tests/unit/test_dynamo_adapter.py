@@ -161,3 +161,52 @@ def test_update_cadence_creates_profile_if_missing(dynamo):
     # No prior GET /settings — update should still work by creating the PROFILE first.
     view = dynamo.update_cadence("sub-1", kind="biweekly", anchor="2099-01-08")
     assert view["cadences"][-1]["kind"] == "biweekly"
+
+
+# --- imports & file claim (Slice 4, FR-2) ----------------------------------------------
+
+def _new_import(dynamo, sub, import_id, created_at):
+    return dynamo.create_import(
+        sub, import_id, filename="f.csv", account_label="Chase 5980",
+        account_id="chase-5980", object_key=f"{sub}/{import_id}.csv", created_at=created_at,
+    )
+
+
+def test_list_imports_newest_first(dynamo):
+    # ULIDs embed a time prefix; created in ascending time, listed descending.
+    from core.ids import new_ulid
+
+    early = new_ulid(now_ms=1_000_000_000_000, randomness=b"\x00" * 10)
+    late = new_ulid(now_ms=2_000_000_000_000, randomness=b"\x00" * 10)
+    _new_import(dynamo, "sub-1", early, "2026-07-01T00:00:00Z")
+    _new_import(dynamo, "sub-1", late, "2026-07-19T00:00:00Z")
+
+    listed = dynamo.list_imports("sub-1")
+    assert [i["importId"] for i in listed] == [late, early]
+
+
+def test_get_missing_import_is_none(dynamo):
+    assert dynamo.get_import("sub-1", "nope") is None
+
+
+def test_claim_file_dedupes_across_different_imports(dynamo):
+    assert dynamo.claim_file("sub-1", "hash-abc", "import-1") is True
+    # Same file, a *different* import → genuine re-upload, rejected (FR-2.2).
+    assert dynamo.claim_file("sub-1", "hash-abc", "import-2") is False
+
+
+def test_claim_file_resumes_same_import(dynamo):
+    assert dynamo.claim_file("sub-1", "hash-abc", "import-1") is True
+    # Same importId re-claiming (crash replay) → allowed to resume.
+    assert dynamo.claim_file("sub-1", "hash-abc", "import-1") is True
+
+
+def test_put_transaction_is_idempotent(dynamo):
+    body = {
+        "type": "TXN", "txnId": "abc123", "date": "2026-07-03", "amountCents": -675,
+        "direction": "debit", "balanceCents": 123256, "accountId": "chase-5980",
+        "descriptionRaw": "COFFEE", "merchantNormalized": "coffee", "importId": "imp-1",
+        "categoryStatus": "uncategorized",
+    }
+    assert dynamo.put_transaction("sub-1", body) is True
+    assert dynamo.put_transaction("sub-1", body) is False  # same key → no dup

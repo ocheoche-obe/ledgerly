@@ -1,7 +1,7 @@
 # Ledgerly — Architectural Decisions Log (ADL)
 
 **Status:** Living document — updated as decisions are made
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-19
 
 ---
 
@@ -56,6 +56,8 @@ Superseded.
 | ADR-009 | Async backbone: SQS queue + DLQ for categorization | Accepted |
 | ADR-010 | AWS account topology: dedicated account per project | Accepted |
 | ADR-011 | CI/CD deploy federation: GitHub OIDC assuming CDK bootstrap roles | Accepted |
+| ADR-012 | Transaction natural key includes the running balance | Accepted |
+| ADR-013 | Per-file account identity supplied (and confirmed) at upload time | Accepted |
 
 ---
 
@@ -506,6 +508,141 @@ reviewer (the owner) rather than by a distinct AWS identity.
 - **Approval is a GitHub gate, not an AWS one:** `prod` protection depends on the GitHub
   Environment reviewer rule; both stages ultimately assume roles in the same account
   (consistent with §0.1's one-account/two-stage model).
+
+---
+
+## ADR-012: Transaction natural key includes the running balance
+
+**Status:** Accepted (2026-07-19, Slice 4)
+
+### Context
+
+Slice 4 ingests bank-export CSVs and must be idempotent (FR-2.2): re-uploading the same
+file, or overlapping exports of the same account, must not create duplicate transactions.
+The architecture (§2.4) fixes dedupe as *key-equality* on a content-derived natural key —
+`txnId = sha256(accountId · date · amountCents · rawDescription)[:16]` — because bank CSVs
+carry **no stable per-transaction identifier**. Two exports of the same posted transaction
+therefore produce the same `txnId` and the conditional put makes the second a no-op. Clean —
+until the owner's real Chase checking export was examined.
+
+Real exports contain **legitimately distinct transactions that are identical** across
+`date`, `amountCents`, and `rawDescription`:
+
+- three `TST* MIRRA VR BELLEVUE` charges of `-$31.76`, all posted `06/29/2026`;
+- numerous `-$3.00` `MTA*NYCT PAYGO` subway rides posted on the same day.
+
+Under the §2.4 key these collapse to one `txnId`, so an import would **silently drop** the
+2nd and 3rd MIRRA charge and every duplicate subway ride — under-counting real spend on
+exactly the small, repeated purchases a budgeting app must get right. This is a correctness
+bug, not an edge case, and it is invisible (the import summary would report the dropped rows
+as "duplicates").
+
+The export does carry one field that distinguishes these rows: the running **`Balance`**
+after each posting. Balance is a historical fact — the balance after a given posted
+transaction never changes — so it is **stable across re-exports and overlapping exports**,
+the property FR-2.2 depends on, while differing between same-day identical charges (the three
+MIRRA rows show 3285.11 / 3316.87 / 3348.63).
+
+### Decision
+
+Extend the transaction natural key to include the post-transaction running balance:
+
+```
+txnId = sha256(accountId · date · amountCents · rawDescription · balanceCents)[:16]
+```
+
+`balanceCents` is the `Balance` column parsed to integer cents (the same treatment as
+`amountCents`). Everything else in the architecture's dedupe design is unchanged: the key is
+still content-derived, dedupe is still `PutItem` + `attribute_not_exists(sk)` key-equality,
+and file-level idempotency via `FILEHASH#<sha256>` (AP 12) still short-circuits whole-file
+re-uploads before rows are even considered. Architecture §2.4 is updated to this formula in
+the same slice (doc bumped, no other design change).
+
+### Alternatives considered
+
+- **Keep the §2.4 key as written** — matches the doc, no ADR. Rejected: silently drops
+  legitimate same-day/same-amount/same-merchant transactions, under-counting spend with no
+  signal to the owner. A budgeting app cannot quietly lose transactions.
+- **Within-file occurrence index** — append an ordinal (`:0`, `:1`, `:2`) to disambiguate
+  identical rows within a file. Rejected: not stable across overlapping exports — if one
+  export starts mid-day and includes only two of the three MIRRA charges, the ordinals shift
+  and dedupe against the full export breaks, reintroducing duplicates (violates FR-2.2).
+- **Require a bank-provided transaction ID** — not available in Chase CSV exports (and the
+  point of FR-2.3's source abstraction is to tolerate thin sources). Deferred to if/when a
+  richer source (e.g. Plaid, which does provide stable IDs) is added — that source's parser
+  can key on the real ID and this content-hash path stays the CSV fallback.
+
+### Consequences
+
+- **No silent transaction loss:** genuinely distinct same-day identical charges are all
+  retained; only true re-imports of the *same* posted transaction dedupe.
+- **FR-2.2 preserved:** balance is stable per posted transaction, so re-uploads and
+  overlapping exports still collapse to no-ops.
+- **Assumes `Balance` is present and stable.** True for Chase checking exports (the only
+  source this slice). A future source lacking a running balance would need its own key
+  strategy in its parser — acceptable, since FR-2.3 already makes the parser pluggable per
+  format and the natural-key construction lives behind that seam.
+- **Pending/authorized-but-unposted rows** are out of scope: Chase's downloadable CSV
+  contains only posted transactions, which is where a stable balance exists. If a future
+  source emits pending rows, its parser owns that decision.
+
+---
+
+## ADR-013: Per-file account identity supplied (and confirmed) at upload time
+
+**Status:** Accepted (2026-07-19, Slice 4)
+
+### Context
+
+`accountId` is part of the transaction natural key (ADR-012, architecture §2.4) and FR-2.1
+requires the account be "identifiable per file at upload time." A bank CSV's *rows* do not
+name the account; the identity lives outside the row data — in the owner's knowledge of which
+account they exported. Chase encodes it in the **filename** (`Chase5980_Activity_...csv`,
+where `5980` is the account's last four). The question is how Ledgerly obtains `accountId`:
+infer it, or have the owner state it.
+
+Because `accountId` feeds the dedupe key, it must be **consistent across every export of the
+same account** — if the same account is labelled `chase-5980` in one import and `chase` in
+another, dedupe silently fails and duplicates accumulate. So whatever supplies it must be
+stable and owner-visible, not a guess buried in the parser.
+
+### Decision
+
+The account identity is a **first-class upload parameter, confirmed by the owner**:
+
+- `POST /imports` accepts an `accountLabel` alongside the filename; it is stored on the
+  `IMPORT#` item and copied onto every `TXN#` the file produces.
+- The upload UI **pre-fills** `accountLabel` by parsing the filename (`Chase5980...` →
+  `Chase ...5980`), and the owner can confirm or edit it before uploading.
+- `accountId` (the natural-key component) is the normalized form of that label
+  (lower-kebab, e.g. `chase-5980`), computed in `core/` so it is deterministic and unit-tested.
+
+Identity is thus owner-asserted at upload, with filename parsing as a convenience default —
+never a silent inference the owner can't see or correct.
+
+### Alternatives considered
+
+- **Silently derive `accountId` from the filename, no UI field** — least code now. Rejected:
+  fragile (a renamed download, a browser "(1)" suffix, or a different bank's filename scheme
+  breaks it) and invisible — a wrong or shifted inference corrupts the dedupe key with no
+  chance for the owner to catch it. Filename parsing is kept, but only as an editable default.
+- **Infer the account from row contents** — impossible; Chase rows don't name the account.
+- **A managed "accounts" entity the owner creates first, then selects at upload** — the
+  clean long-term model for multiple accounts, but heavier than a single-user MVP with one
+  checking account needs. Deferred: `accountLabel` is free text now; promoting it to a
+  first-class Account entity (with a picker) is a natural later slice if account count grows.
+
+### Consequences
+
+- **Stable, visible key component:** the owner sees and confirms the account each import, so
+  the dedupe-critical `accountId` stays consistent across exports of the same account.
+- **Multi-account-ready without new infra:** different labels naturally partition
+  transactions by account today; a future Account entity can back-fill from the labels.
+- **Owner responsibility:** if the owner types two different labels for one account, dedupe
+  keys diverge. Mitigated by the filename-derived default (the same file pattern yields the
+  same suggestion) and, later, by a first-class account picker.
+- **Trusted identity boundary unchanged:** `accountLabel` describes *which bank account* a
+  file is; it is never the *user* identity, which still comes solely from the JWT (FR-1.3).
 
 ---
 
