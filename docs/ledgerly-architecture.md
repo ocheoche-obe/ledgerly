@@ -1,6 +1,6 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
 **Last updated:** 2026-07-19
 
@@ -563,3 +563,4 @@ resolves it.)*
 | 1.2 | 2026-07-14 | Slice-1 implementation correction (no design change): §5.2 repository layout — AWS SDK code (DynamoDB repo, Bedrock `Categorizer` impl) moved from `core/` to a new `backend/adapters/` seam so `core/` stays genuinely AWS-import-free; `.github/` layout updated. |
 | 1.3 | 2026-07-15 | Slice-2 deployment story realized (no design change): §5.4 links ADR-011 — GitHub OIDC deploy role is narrow (assumes CDK bootstrap roles only), `prod` gated by a GitHub Environment required reviewer. |
 | 1.4 | 2026-07-19 | Slice-4 data-model refinement from real Chase exports: §2.4 transaction natural key now includes `balanceCents` (ADR-012) so legitimate same-day/-amount/-merchant charges aren't silently deduped; `IMPORT#` carries an owner-confirmed `accountLabel` (ADR-013). No change to the dedupe *mechanism* (content-hash key-equality + `FILEHASH#`). |
+| 1.5 | 2026-07-21 | Slice-5 categorization pipeline **implemented** as designed (§3.2, §4.5) — no design change to the async shape (SQS→categorizer→Bedrock + DLQ; the §1 diagram already depicted it). Impl details recorded under ADR-008: Bedrock is called via **boto3 `invoke_model`** (not the `anthropic` SDK — zero-runtime-deps) with a forced-tool structured output, and Opus 4.8 is **INFERENCE_PROFILE-only**, so the runtime model id is `us.anthropic.claude-opus-4-8` and the categorizer's IAM grant covers the inference-profile ARN + the underlying foundation-model ARN. `TXN#` items gain `confidence`/`needsReview` + GSI1 (category) / GSI2 (sparse review) keys on categorization, exactly as §2.6 sketched. |

@@ -88,28 +88,42 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   CSV parser registry (FR-2.3; Chase-checking impl) → normalized txns + counted row errors,
   never raises on a bad row (FR-2.5); natural key `sha256(account·date·amountCents·rawDesc·
   balanceCents)[:16]` (ADR-012). `accounts.py`: account label→id (ADR-013). `imports.py`:
-  import record + statuses. `transactions.py`: txn item shape (all Uncategorized until Slice 5).
+  import record + statuses. `transactions.py`: txn item shape + `auto` status + GSI1/GSI2 key
+  helpers (categorizer writes these). `categorize/`: **Categorizer interface** (swappable model
+  seam, ADR-008) + §3.2 decision matrix (`decide_llm`: threshold → auto vs kept-guess-with-review;
+  null/invalid id → uncategorized, nothing mis-filed) + prompt/forced-tool contract.
+  `merchant_rules.py`: `RULE#<merchant>` read seam (FR-3.4; read-only until Slice 7).
 - **`backend/adapters/`** — AWS-facing persistence (boto3). `dynamo.py`:
   `get_or_create_settings` (AP #1), `update_cadence` (FR-4.2), `list/create/update_category`
-  (AP #2/#3), plus Slice-4: `create/get/list_imports` + `set_import_status` (AP 11),
+  (AP #2/#3), Slice-4: `create/get/list_imports` + `set_import_status` (AP 11),
   `claim_file` (AP 12, file idempotency — recognizes its own replay), `put_transaction`
-  (AP 7, row idempotency), `query_transactions` (AP 6). `s3.py`: presigned PUT URL +
-  `<sub>/<importId>` key round-trip (identity from the key, not client input).
+  (AP 7, row idempotency), `query_transactions` (AP 6), plus Slice-5: `list_category_choices`,
+  `get_rule` (AP 13), `get_transaction`, `apply_categorization` (AP 10, correction-preserving
+  update + GSI1/GSI2 maintenance). `s3.py`: presigned PUT URL + `<sub>/<importId>` key
+  round-trip. `bedrock.py`: `BedrockCategorizer` via **boto3 `invoke_model`** (not the
+  `anthropic` SDK — zero runtime deps), inference-profile `us.anthropic.claude-opus-4-8`
+  (Opus 4.8 is INFERENCE_PROFILE-only), forced-tool structured output. `sqs.py`: best-effort
+  categorization enqueue (a failed enqueue never fails a persisted import, FR-3.5).
 - **`backend/functions/`** — thin handlers, identity from verified JWT claims only (FR-1.3):
   `api_settings` (`GET`/`PATCH /settings`, live cycle), `api_categories` (`GET`/`POST
   /categories` + `PATCH /categories/{id}`), `api_imports` (`POST /imports` presign +
-  `GET /imports[/{id}]` polling), `api_transactions` (`GET /transactions?from&to`), and the
-  **S3-triggered `importer`** (parse → file/row idempotent puts → import summary; no-op on
-  redelivered terminal imports).
+  `GET /imports[/{id}]` polling), `api_transactions` (`GET /transactions?from&to`), the
+  **S3-triggered `importer`** (parse → file/row idempotent puts → import summary → enqueue added
+  rows; no-op on redelivered terminal imports), and the **SQS-triggered `categorizer`**
+  (rule-first → batched Bedrock → correction-preserving updates; partial-batch-failure → DLQ).
+  `backend/eval/` (not a Lambda): the label/score accuracy harness A/Bing Opus 4.8 vs Sonnet 5.
 - **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
   constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
   Hosted-UI/PKCE client + owner user), `Ingest` (private SSE-S3 upload bucket: TLS-only,
   30-day object expiry, CORS scoped to the SPA origin[s]; import Lambda; S3→Lambda
   notification on `.csv`), `Api` (HTTP API + JWT authorizer + settings/categories/imports/
   transactions Lambdas via a shared `_api_lambda` helper, each table-scoped least-privilege;
-  imports Lambda also gets `s3:PutObject` on the bucket), `Web` (private S3 + CloudFront +
-  runtime `config.json`), `Ops` (AWS Budgets billing alarm). Categorization (SQS) arrives in
-  Slice 5. Separately, `LedgerlyCicdStack` (`Ledgerly-cicd`, account-global, deployed once) =
+  imports Lambda also gets `s3:PutObject` on the bucket; importer also gets `sqs:SendMessage`
+  on the categorization queue), `Categorization` (SQS queue + DLQ maxReceive 3 + DLQ-depth
+  alarm + categorizer Lambda + Bedrock `InvokeModel` IAM scoped to the one model's profile +
+  foundation-model ARNs, ADR-008/009), `Web` (private S3 + CloudFront + runtime `config.json`),
+  `Ops` (AWS Budgets billing alarm). Separately, `LedgerlyCicdStack` (`Ledgerly-cicd`,
+  account-global, deployed once) =
   `Cicd` construct: GitHub OIDC provider + narrow `ledgerly-github-deploy` role (ADR-011).
 - **`.github/` (CI/CD)** — `checks.yml` (reusable test/lint/synth gate) called by `ci.yml`
   (PRs) and `deploy.yml` (push to `main` → deploy `dev`, then manual-approved `prod` via the
@@ -118,8 +132,9 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   `api.ts` = typed client (bearer token on every call) + `accountLabelFromFilename`/
   `formatCents` helpers. `SettingsPanel` = cadence + current cycle; `CategoriesPanel` =
   category CRUD; `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
-  recent imports; `TransactionsPanel` = date-window transaction table; `styles.ts` = shared
-  inline styles.
+  recent imports; `TransactionsPanel` = date-window transaction table with a **Category** column that reflects
+  the async pipeline (reads Uncategorized until the categorizer runs, then the category name +
+  a "review" tag on low confidence, Slice 5); `styles.ts` = shared inline styles.
 
 ## Repository layout
 
@@ -163,11 +178,26 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 4 — CSV import end-to-end: complete & deployed (2026-07-21), PR [#23] merged (dev +
-prod). Owner smoke-tested live (same-file re-upload → 0 added; overlapping export → only new
-rows, FR-2.2 confirmed). Next: Slice 5 — AI categorization pipeline + eval harness.**
+**Slice 5 — AI categorization pipeline + eval harness: 🔨 code-complete (2026-07-21), not yet
+deployed. Async pipeline (SQS+DLQ → categorizer Lambda → merchant rules → Bedrock Claude Opus
+4.8) + eval harness. 164 backend + 13 frontend tests, ruff clean, `cdk synth` green dev+prod.
+Deploy + live smoke + eval baseline land via the pipeline on merge (Option A). Next: run
+`/wrap-slice` (security-review + code-review + commit + PR), then owner provides a labeled
+transaction sample for the accuracy baseline.**
 
-- Last completed: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions,
+- Last completed (code): Slice 5 — `core/categorize/` (Categorizer interface + §3.2 decision
+  matrix + prompt/forced-tool contract), `core/merchant_rules.py` (RULE# read seam),
+  `adapters/bedrock.py` (BedrockCategorizer via **boto3 `invoke_model`**, not the `anthropic`
+  SDK — zero runtime deps) + `adapters/sqs.py` (best-effort enqueue) + `dynamo.py`
+  categorization methods (`list_category_choices`, `get_rule`, `apply_categorization` —
+  correction-preserving + GSI1/GSI2 maintenance), `functions/categorizer` (SQS-triggered,
+  rule-first → batched Bedrock, partial-batch-failure → DLQ), `CategorizationConstruct`
+  (SQS+DLQ+alarm+Bedrock IAM), and `backend/eval/` (label/score harness A/Bing Opus 4.8 vs
+  Sonnet 5). Confidence threshold **0.8** (owner-approved). **Bedrock note:** Opus 4.8 is
+  INFERENCE_PROFILE-only → model id `us.anthropic.claude-opus-4-8`; IAM grant covers profile +
+  foundation-model ARNs (ADR-008 impl notes). No new ADR (design covered by ADR-008/009 +
+  architecture §3.2). No diagram re-render — the async pipeline was already depicted.
+- Prior: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions,
   FR-2.1–2.5. New `IngestConstruct` (upload bucket + S3-triggered importer);
   `core/csv_normalize.py` format-keyed parser (Chase checking); three-level idempotency
   (file hash / row natural key / S3 redelivery). Two ADRs from the owner's real Chase

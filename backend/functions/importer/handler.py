@@ -13,7 +13,11 @@ Flow per file:
 
 Every write is conditional, so a crash + S3 redelivery re-runs harmlessly (NFR-3.2):
 `claim_file` recognizes its own prior claim and resumes; transaction puts dedupe.
-Categorization (FR-3) is Slice 5 — everything lands Uncategorized here.
+
+Categorization (FR-3, Slice 5): once rows are persisted the *newly added* ones are enqueued
+for the async categorizer (architecture §3.2). Enqueue is best-effort and never fails the
+import — the transactions are already saved as Uncategorized, so a lost enqueue costs a
+re-drive at worst, never data (FR-3.5).
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from adapters.dynamo import (
     set_import_status,
 )
 from adapters.s3 import get_object_bytes, parse_upload_key
+from adapters.sqs import enqueue_categorization
 from core.csv_normalize import file_sha256, parse
 from core.imports import (
     STATUS_COMPLETE,
@@ -91,13 +96,15 @@ def _process_object(key: str) -> None:
         return
 
     errors = list(result["errors"])
-    added = duplicate = 0
+    added_keys: list[dict] = []
+    duplicate = 0
     for txn in result["transactions"]:
         if put_transaction(sub, to_item(txn, import_id=import_id)):
-            added += 1
+            added_keys.append({"date": txn["date"], "txnId": txn["txnId"]})
         else:
             duplicate += 1  # already imported (re-upload / overlapping export)
 
+    added = len(added_keys)
     set_import_status(
         sub, import_id, STATUS_COMPLETE,
         added=added, duplicate=duplicate, failed=len(errors), errors=errors,
@@ -106,3 +113,12 @@ def _process_object(key: str) -> None:
         "stage": "importer", "importId": import_id, "outcome": "complete",
         "added": added, "duplicate": duplicate, "failed": len(errors),
     }))
+
+    # Hand the new rows to the async categorizer (FR-3). Best-effort: a failure here must not
+    # fail an import whose transactions are already durably persisted (FR-3.5).
+    try:
+        enqueue_categorization(sub, added_keys)
+    except Exception:
+        logger.exception(json.dumps({
+            "stage": "importer", "importId": import_id, "err": "enqueue_categorization failed"
+        }))

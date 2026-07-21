@@ -125,6 +125,37 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
   - SPA stale access-token on silent renew (code-review #3) → **Slice 8** (existing token
     rework); not fixed this slice.
 
+### Slice 5 — AI categorization pipeline + eval harness (2026-07-21, code-complete)
+- **Met exit criteria?** Partial by design. Local gates green (164 backend + 13 frontend tests;
+  ruff clean; `cdk synth` dev + prod). The three **live** criteria — a real import fully
+  categorized within ~2 min (NFR-2.2), the DLQ failure path, and the **per-model accuracy
+  baseline** — verify **post-merge on the pipeline** (Option A, no workstation deploy), and the
+  baseline additionally needs the owner's labeled transaction sample. Held open until then.
+- **Actual cost / resource use:** first paid-per-use AI service (Bedrock). MTD spend was **$0.01**
+  at slice start; expected steady-state <$1/mo for categorization (ADR-008: ~10–15 batched calls
+  on ~500 txns/mo). SQS/DLQ/Lambda ride the free tier. Ceiling (NFR-1.1) unthreatened — the eval
+  A/B is the only near-term spend and is a handful of calls.
+- **What worked:** the `Categorizer` interface (ADR-008) made the model a genuine config seam —
+  the eval harness runs the *same* `decide_llm` production uses against both Opus 4.8 and Sonnet 5
+  with zero code change. Keeping the decision matrix + prompt/parse contract pure meant the whole
+  §3.2 logic (threshold, validity, GSI mapping) and the harness got fast unit tests with a fake
+  model — no Bedrock in CI. The async pipeline's shape matched the pre-existing diagram exactly,
+  so no re-render (same as Slice 4's ingest flow) — evidence the upfront architecture held.
+- **What surprised us / didn't work:** (1) **Opus 4.8 (and Sonnet 5) are INFERENCE_PROFILE-only
+  on Bedrock** — a bare `invoke_model` on the foundation-model id fails; the runtime id must be
+  the inference-profile `us.anthropic.claude-opus-4-8`, and the IAM grant needs both the profile
+  ARN and the cross-region foundation-model ARN. Caught by a live `list-foundation-models` check
+  *before* deploy, not by a failed deploy. (2) The zero-runtime-deps posture forced a good call:
+  Bedrock via **boto3 `invoke_model`** (native Anthropic body + forced-tool output) rather than
+  the `anthropic` SDK — no layer, consistent with the hand-rolled-ULID reasoning.
+- **Findings routed to:**
+  - INFERENCE_PROFILE-only + boto3-not-SDK → **ADR-008 implementation notes** + plan Slice 5
+    completion notes + memory (a live-cloud constraint future sessions need).
+  - Model A/B (Opus 4.8 vs Sonnet 5) → **eval harness this slice** (turns the ADR-008 "measured
+    downgrade" into a runnable A/B); result may seed a superseding ADR-008 note.
+  - `/code-review` finding: rule-hit path doesn't re-validate the rule's category → **backlog B-4**
+    → Slice 7 (rule creation); not triggerable now (rules table empty this slice).
+
 ---
 
 ## 3. Release / version retrospective
@@ -181,3 +212,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 | 2026-07-15 | Slice 2 per-slice beat added (CI/CD deploy pipeline + prod promotion — all exit criteria met) |
 | 2026-07-17 | Slice 3 per-slice beat added (categories, settings & cycle engine — code-complete at PR; deploy/smoke-test post-merge via pipeline). `/code-review` adopted into `/wrap-slice` |
 | 2026-07-19 | Slice 3 beat finalized — deployed dev + prod on merge, all exit criteria met (owner smoke-test + unauth 401 verified) |
+| 2026-07-21 | Slice 5 per-slice beat added (AI categorization pipeline + eval harness — code-complete at PR; live criteria + accuracy baseline post-merge via pipeline). Key finding: Bedrock Opus 4.8/Sonnet 5 are INFERENCE_PROFILE-only |

@@ -1,12 +1,13 @@
 """LedgerlyStack — one stack per stage, composed of constructs (architecture §5.1).
 
-Slice 1 (walking skeleton) wired five constructs: Data, Auth, Api, Web, Ops. Slice 4 adds
-Ingest (CSV upload bucket + import Lambda). Categorization arrives in Slice 5.
+Slice 1 (walking skeleton) wired five constructs: Data, Auth, Api, Web, Ops. Slice 4 added
+Ingest (CSV upload bucket + import Lambda). Slice 5 adds Categorization (SQS queue + DLQ +
+categorizer Lambda + Bedrock grant), the async AI backbone.
 
 Construct order matters — it keeps CloudFormation dependencies acyclic:
-  Data → Web(bucket+CDN) → Auth(callback URLs need the site URL) → Ingest(needs table +
-  SPA origins for bucket CORS) → Api(needs Auth+Data+Ingest bucket)
-  → Web.deploy_spa(runtime config needs Auth+Api) → Ops.
+  Data → Categorization(needs table; owns the queue) → Web(bucket+CDN) → Auth(callback URLs
+  need the site URL) → Ingest(needs table + queue + SPA origins) → Api(needs Auth+Data+Ingest
+  bucket) → Web.deploy_spa(runtime config needs Auth+Api) → Ops.
 """
 import aws_cdk as cdk
 from aws_cdk import Stack
@@ -15,6 +16,7 @@ from constructs import Construct
 from ledgerly.config import StageConfig
 from ledgerly.constructs.api import ApiConstruct
 from ledgerly.constructs.auth import AuthConstruct
+from ledgerly.constructs.categorization import CategorizationConstruct
 from ledgerly.constructs.data import DataConstruct
 from ledgerly.constructs.ingest import IngestConstruct
 from ledgerly.constructs.ops import OpsConstruct
@@ -31,6 +33,9 @@ class LedgerlyStack(Stack):
         )
 
         data = DataConstruct(self, "Data", stage=stage)
+        # Categorization owns the SQS queue the importer feeds; created before Ingest so the
+        # importer can be granted send access + the queue URL.
+        categorization = CategorizationConstruct(self, "Categorization", stage=stage, table=data.table)
         web = WebConstruct(self, "Web", stage=stage)
         auth = AuthConstruct(self, "Auth", stage=stage, site_url=web.site_url)
         # CORS: the deployed site always; the local dev SPA origin only in dev (prod must not
@@ -45,6 +50,7 @@ class LedgerlyStack(Stack):
             "Ingest",
             stage=stage,
             table=data.table,
+            categorize_queue=categorization.queue,
             allowed_origins=allowed_origins,
         )
         api = ApiConstruct(
@@ -74,3 +80,4 @@ class LedgerlyStack(Stack):
         cdk.CfnOutput(self, "UserPoolClientId", value=auth.user_pool_client.user_pool_client_id)
         cdk.CfnOutput(self, "TableName", value=data.table.table_name)
         cdk.CfnOutput(self, "UploadBucket", value=ingest.bucket.bucket_name)
+        cdk.CfnOutput(self, "CategorizeQueueUrl", value=categorization.queue.queue_url)

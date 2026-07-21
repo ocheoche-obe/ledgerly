@@ -1,0 +1,17 @@
+{
+  "_comment": "SYNTHETIC template — not real transactions. Replace with an anonymized-enough sample of the owner's real Chase exports, label each trueCategoryId (use `label` to draft, then confirm), and run `score`. categoryIds here are illustrative.",
+  "categories": [
+    { "categoryId": "01CATGROCERIES", "name": "Groceries" },
+    { "categoryId": "01CATDINING", "name": "Dining Out" },
+    { "categoryId": "01CATTRANSPORT", "name": "Transportation" },
+    { "categoryId": "01CATUTILITIES", "name": "Utilities" },
+    { "categoryId": "01CATINCOME", "name": "Income" }
+  ],
+  "transactions": [
+    { "txnId": "s1", "merchantNormalized": "trader joes", "descriptionRaw": "TRADER JOES #482", "amountCents": -6231, "direction": "debit", "trueCategoryId": "01CATGROCERIES" },
+    { "txnId": "s2", "merchantNormalized": "blue bottle coffee", "descriptionRaw": "TST* BLUE BOTTLE COFFEE", "amountCents": -725, "direction": "debit", "trueCategoryId": "01CATDINING" },
+    { "txnId": "s3", "merchantNormalized": "lyft", "descriptionRaw": "LYFT *RIDE THU 9PM", "amountCents": -1840, "direction": "debit", "trueCategoryId": "01CATTRANSPORT" },
+    { "txnId": "s4", "merchantNormalized": "pge", "descriptionRaw": "PACIFIC GAS ELECTRIC WEB", "amountCents": -11207, "direction": "debit", "trueCategoryId": "01CATUTILITIES" },
+    { "txnId": "s5", "merchantNormalized": "acme payroll", "descriptionRaw": "ACME CORP DIRECT DEP", "amountCents": 320000, "direction": "credit", "trueCategoryId": "01CATINCOME" }
+  ]
+}

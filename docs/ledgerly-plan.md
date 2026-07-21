@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 0.6
+**Version:** 1.1
 **Created:** 2026-07-12
 
 ---
@@ -78,7 +78,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
-| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
+| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 code-complete | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25) |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
@@ -338,7 +338,7 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     the fix ADR-013 already anticipated). This observation also motivated creating
     `ledgerly-backlog.md` (build-time inbox in front of the parking lot).
 
-### Slice 5 — AI categorization pipeline + eval harness ⬜ ⚠
+### Slice 5 — AI categorization pipeline + eval harness 🔨 ⚠
 
 - **Goal:** imported transactions get categorized automatically with confidence, async,
   and accuracy is *measured*, not vibes (NFR-5.3).
@@ -348,8 +348,13 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   never lost (FR-3.5); Bedrock IAM grant scoped to the one model; **eval harness**: a
   labeled sample set of the owner's real (anonymized-enough) transactions + a script that
   reports accuracy per run — the gate for prompt/model changes and the measurement for
-  success criterion 2; budget-posture check (first paid-per-use AI service — expected
-  <$1/mo, ceiling unaffected).
+  success criterion 2. **Baseline model = Claude Opus 4.8 (ADR-008), but the harness runs
+  the same labeled set against Sonnet 5 too** (owner-considered, 2026-07-21): the cost delta
+  at this volume is cents, so accuracy — the product (criterion 2) — wins, *but* the swappable
+  `Categorizer` interface makes an A/B nearly free, turning "cheaper model?" into a measured
+  decision this slice rather than a deferred maybe. If Sonnet 5 matches Opus within noise,
+  downgrade + supersede ADR-008; else the original call is confirmed with evidence.
+  Budget-posture check (first paid-per-use AI service — expected <$1/mo, ceiling unaffected).
 - **Scope out:** review-queue UI (Slice 7); merchant-rule *creation* (Slice 7 — this
   slice only reads rules, so the table starts empty and everything goes to the LLM).
 - **⚠ Open decisions:** confidence threshold default (proposal: 0.8, tuned against the
@@ -357,8 +362,37 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   ad-hoc.
 - **Exit criteria:** ☐ a real import ends fully categorized within ~2 min (NFR-2.2) ☐
   DLQ path verified (forced failure lands Uncategorized + alarm) ☐ eval harness reports
-  a baseline accuracy number ☐ docs current (+ ADL note if threshold ≠ 0.8).
-- **Completion notes:** _—_
+  a baseline accuracy number **per model (Opus 4.8 + Sonnet 5)** ☐ docs current (+ ADL note
+  if threshold ≠ 0.8; + superseding note to ADR-008 if the eval justifies a model switch).
+- **Completion notes:** _🔨 **code-complete** (2026-07-21) — deploy + live verification pending
+  via the pipeline on merge (Option A, as prior slices), so the three ☐ live criteria stay open
+  until then. Local gates green: **164 backend tests** (was 124) + **13 frontend**; ruff clean;
+  `cdk synth` green dev + prod._
+  - **Pure core (`core/categorize/`)** — the `Categorizer` interface (swappable model seam,
+    ADR-008) + the §3.2 decision matrix (`decide_rule_hit`/`decide_llm`: threshold → auto vs
+    kept-guess-with-review; null/invalid id → uncategorized+review, nothing mis-filed, FR-3.5)
+    + the prompt/structured-output contract (forced-tool schema, robust parse). `core/merchant_rules.py`
+    (RULE# read seam, FR-3.4 — read-only this slice) + GSI1/GSI2 key helpers + `auto` status in
+    `core/transactions.py`.
+  - **Adapters** — `bedrock.py` (`BedrockCategorizer` via **boto3 `invoke_model`**, not the
+    `anthropic` SDK — preserves zero-runtime-deps); `dynamo.py` grew `list_category_choices`,
+    `get_rule` (AP 13), `get_transaction`, and `apply_categorization` (AP 10 — correction-preserving
+    conditional update + GSI maintenance); `sqs.py` best-effort enqueue (a failed enqueue never
+    fails a persisted import, FR-3.5).
+  - **Lambdas** — `functions/categorizer` (SQS-triggered, merchant-rule-first → batched Bedrock,
+    partial-batch-failure reporting → DLQ; idempotent replay is a no-op). Importer now enqueues
+    the newly-added rows.
+  - **Infra** — `CategorizationConstruct` (SQS + DLQ maxReceive 3 + DLQ-depth alarm + categorizer
+    Lambda + Bedrock IAM scoped to the one model). The architecture diagram **already depicted
+    this exact async pipeline** (queue → categorizer → Bedrock + DLQ), so no re-render — same as
+    Slice 4's ingest flow.
+  - **Eval harness (`backend/eval/`)** — pure scoring (`harness.py`, unit-tested) + a `label`/`score`
+    CLI implementing the owner-agreed "you draft, I confirm" flow, A/B'ing Opus 4.8 vs Sonnet 5.
+  - **⚠ Live finding → ADR-008 note:** Opus 4.8 (and Sonnet 5) are **INFERENCE_PROFILE-only** on
+    Bedrock, so `BEDROCK_MODEL_ID` is the inference-profile id `us.anthropic.claude-opus-4-8` and
+    the IAM grant covers profile + foundation-model ARNs. Threshold stays **0.8** (owner-approved),
+    to be tuned against the eval baseline. **Owner input still needed:** a labeled sample of real
+    (anonymized-enough) transactions to draft → confirm → score for the baseline number.
 
 ### Slice 6 — Budgets & at-a-glance dashboard ⬜
 
@@ -457,3 +491,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.8 | 2026-07-19 | Slice 3 ✅ deployed (dev + prod via pipeline on merge of #21). All exit criteria met: owner smoke-tested dev, unauth/bad-token → 401 verified. Next: Slice 4 — CSV import (needs owner's sample bank CSVs at start) |
 | 0.9 | 2026-07-19 | Slice 4 🔨 code-complete: CSV import end-to-end (presigned upload → S3 → import Lambda → transactions), FR-2.1–2.5. ADR-012 (natural key incl. balance) + ADR-013 (account label at upload) recorded from the owner's real Chase exports; architecture → v1.4. New `IngestConstruct`; 124 backend + 13 frontend tests. Deploy + live smoke-test via pipeline on merge (Option A) — those exit criteria stay open until then |
 | 1.0 | 2026-07-21 | Slice 4 ✅ deployed (PR #23 merged); owner smoke-tested live — same-file re-upload 0 added, overlapping export only new rows added (FR-2.2 confirmed end-to-end). All exit criteria met. `ledgerly-backlog.md` introduced (build-time observation inbox); B-1 (account picker, from the smoke test), B-2 (txn pagination/window), B-3 (frontend visual pass) seeded. Next: Slice 5 — AI categorization pipeline + eval harness |
+| 1.1 | 2026-07-21 | Slice 5 🔨 code-complete: async AI categorization (SQS+DLQ → categorizer → Bedrock Claude Opus 4.8) + eval harness, FR-3.1–3.3/3.5. `core/categorize/` decision matrix + `merchant_rules` + `bedrock`/`sqs` adapters + `CategorizationConstruct`; 164 backend/13 frontend tests. Threshold 0.8 (owner-approved); harness A/Bs Opus 4.8 vs Sonnet 5 (owner-agreed, 2026-07-21). ADR-008 impl notes added (boto3 not `anthropic` SDK; Opus 4.8 is INFERENCE_PROFILE-only → `us.anthropic.…` id + profile/FM IAM grant). Deploy + live smoke + eval baseline via pipeline on merge (Option A) — those exit criteria stay open until then; owner's labeled sample still needed for the baseline number |
