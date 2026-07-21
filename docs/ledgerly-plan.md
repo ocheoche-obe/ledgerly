@@ -78,7 +78,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
-| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 ⚠ | — |
+| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 code-complete | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25) |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
