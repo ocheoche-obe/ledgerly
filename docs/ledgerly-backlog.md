@@ -45,6 +45,7 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-1 | Account field is free-text (a key component you can mistype) | Slice 4 | UX / data-integrity | 🆕 | new small slice (Accounts entity + picker) |
 | B-2 | Transaction list has no pagination + a fixed default window | Slice 4 | tech-debt / UX | 🔎 | Slice 7 (filters/search) |
 | B-3 | Frontend is intentionally basic (inline styles) — visual pass deferred | Slice 1 | UX / polish | 🔎 | later (dedicated polish pass) |
+| B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
 
 ---
 
@@ -104,6 +105,26 @@ product surface (import → categorize → dashboard → review) exists, so the 
 against the real thing rather than re-done each slice.
 
 **Refs:** `frontend/src/styles.ts` and all panels.
+
+---
+
+### B-4 — Categorizer rule-hit path doesn't re-validate the rule's category 🔎
+
+**Noticed:** Slice 5 (code review). **Type:** correctness / data-integrity. **Likely home:** Slice 7.
+
+The categorizer's LLM path validates the returned `categoryId` against the owner's *active*
+categories (`decide_llm` → unknown/archived id degrades to `uncategorized`). The **merchant-rule
+path** (`decide_rule_hit`) does not — it assigns the rule's stored `categoryId` verbatim. A rule
+that points at a since-archived category would therefore auto-assign an archived bucket (and set
+its GSI1 key), which the LLM path would have refused.
+
+**Why it's not a Slice-5 bug:** merchant-rule *creation* is Slice 7 — this slice only *reads*
+rules, and the table starts empty, so no rule can fire. The guard belongs with rule creation:
+when Slice 7 wires corrections → rules, either validate the rule's category on write, or have the
+categorizer drop a rule whose category is no longer active (mirroring the LLM validity check).
+
+**Refs:** `backend/functions/categorizer/handler.py`; `backend/core/categorize/__init__.py`
+(`decide_rule_hit` vs `decide_llm`); relates to FR-4.5 (archive/reassignment, Slice 7).
 
 ---
 

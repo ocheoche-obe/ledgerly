@@ -358,6 +358,24 @@ Categorization calls **Claude Opus 4.8 via Amazon Bedrock** (model ID
 - Model choice is revisit-cheap: the eval harness measures accuracy per model, and a swap
   is config + ADR.
 
+### Implementation notes (Slice 5, 2026-07-21)
+
+- **Called through boto3, not the `anthropic` SDK.** The categorizer invokes Bedrock via
+  `boto3` `bedrock-runtime.invoke_model` with the native Anthropic Messages body
+  (`anthropic_version: bedrock-2023-05-31`), *not* the `anthropic[bedrock]` package. boto3 is
+  already ambient in the Lambda runtime and the adapters' SDK, so this preserves the
+  zero-runtime-deps posture (no pip/layer step) the Lambda asset relies on — the same reasoning
+  as the hand-rolled ULID. Structured output is a **forced tool call** (`record_categorizations`)
+  with thinking disabled — the most portable machine-readable-output path across Anthropic
+  models on Bedrock, and the setting Bedrock requires alongside a forced `tool_choice`.
+- **Opus 4.8 is INFERENCE_PROFILE-only on Bedrock** (verified live via
+  `bedrock list-foundation-models`): direct on-demand `invoke_model` on the bare
+  `anthropic.claude-opus-4-8` foundation-model id is not supported. The deployed
+  `BEDROCK_MODEL_ID` is therefore the **inference-profile** id `us.anthropic.claude-opus-4-8`
+  (ACTIVE in the account), and the least-privilege IAM grant covers **both** the profile ARN
+  *and* the underlying foundation-model ARN across regions (a cross-region profile fans out).
+  Same shape for the eval's Sonnet 5 A/B (`us.anthropic.claude-sonnet-5`).
+
 ---
 
 ## ADR-009: Async backbone — SQS queue + DLQ for the categorization pipeline
