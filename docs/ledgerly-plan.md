@@ -77,7 +77,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 1 | Walking skeleton (auth → API → data → UI, deployed) | FR-1, NFR-1.2, NFR-4.x | ✅ deployed to dev (2026-07-14) | [#1](https://github.com/ocheoche-obe/ledgerly/pull/1) |
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
-| 4 | CSV import end-to-end | FR-2.1–2.5 | 🔨 | — |
+| 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ⬜ ⚠ | — |
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
@@ -293,11 +293,16 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
   short-circuit; proven by `test_importer.py`, to be re-verified live) ☑ overlapping
   exports dedupe (row-level natural-key conditional put; integration-tested with two
   overlapping fixtures) ☑ malformed rows counted, not fatal (FR-2.5) ☑ import report
-  visible (poll `GET /imports/{id}`) ☑ docs current ☐ deployed via pipeline + owner
-  smoke-test on `dev` _(pending merge — Option A, no workstation deploy)_.
-- **Completion notes:** _Code-complete; deploy + live smoke-test via the pipeline on merge
-  (Option A, as Slice 3). 124 backend tests (was 69) + 13 frontend (was 5); ruff clean;
-  `cdk synth` green for dev + prod._
+  visible (poll `GET /imports/{id}`) ☑ docs current ☑ deployed via pipeline + owner
+  smoke-test (PR #23 merged; owner verified live on the deployed SPA — re-upload of the same
+  file added 0 / 94 dup, the overlapping month-to-date file added only the fresh rows
+  (+94 / 0 dup), FR-2.2 confirmed end-to-end).
+- **Completion notes:** _Deployed via the pipeline on merge of #23 (Option A, no workstation
+  deploy, as Slice 3). Owner smoke-tested the deployed app: same-file re-upload → 0 added,
+  overlapping export → only new rows added, duplicates marked. 124 backend tests (was 69) +
+  13 frontend (was 5); ruff clean; `cdk synth` green for dev + prod; `/security-review` no
+  findings; `/code-review medium` advisory applied (dead-code drop + widened default txn
+  window; pagination/cross-cycle browsing → backlog B-2)._
   - **CSV pipeline (pure core → adapters → Lambdas).** `core/csv_normalize.py` = a
     format-keyed parser registry (FR-2.3; one impl, Chase checking) that turns raw text
     into normalized txns + counted row errors and **never raises on a bad row** (FR-2.5);
@@ -326,6 +331,12 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     `accountLabelFromFilename`/`formatCents` helpers (unit-tested).
   - **Docs:** ADR-012/013 added (index + bodies); architecture bumped to **v1.4** (§2.4 key
     formula + `IMPORT#.accountLabel`).
+  - **Smoke-test observation → backlog:** the owner noted the import **Account** field is
+    free text with no account registry, and (because `accountId` is a dedupe-key component,
+    ADR-012) mistyping it — dropping the account number — would silently split history /
+    break dedupe. Logged as **backlog B-1** (first-class Accounts entity + dropdown picker;
+    the fix ADR-013 already anticipated). This observation also motivated creating
+    `ledgerly-backlog.md` (build-time inbox in front of the parking lot).
 
 ### Slice 5 — AI categorization pipeline + eval harness ⬜ ⚠
 
@@ -411,6 +422,11 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 
 > Everything deferred lives here and *nowhere else*, so the slice sections stay honest.
 > (Mirrors requirements §3 "Deferred"; this list carries the delivery-order notes.)
+>
+> **Scope note:** this parking lot is for **post-MVP *features*** (requirements §3). Smaller
+> build-time observations — papercuts, tech-debt, UX rough edges noticed mid-slice — live in
+> **`ledgerly-backlog.md`** and get triaged from there into a slice, into this parking lot, or
+> dropped. The two don't overlap: features here, loose observations there.
 
 - **Plaid live bank connection** — top deferred item; sandbox first. Trigger: v1 monthly
   ritual proven (success criterion 1) and owner appetite to revise the cost ceiling
@@ -440,3 +456,4 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.7 | 2026-07-17 | Slice 3 🔨 code-complete, PR open (categories CRUD + settings cadence UI + `core/cycles.py` engine, 69 backend/5 frontend tests). Deploy via pipeline on merge (Option A — no workstation deploy), so deploy/smoke-test exit criteria stay open until then. `/code-review medium` trialled and adopted as advisory step 3 of `/wrap-slice`. No new ADR (design covered by architecture §2.4/§2.6) |
 | 0.8 | 2026-07-19 | Slice 3 ✅ deployed (dev + prod via pipeline on merge of #21). All exit criteria met: owner smoke-tested dev, unauth/bad-token → 401 verified. Next: Slice 4 — CSV import (needs owner's sample bank CSVs at start) |
 | 0.9 | 2026-07-19 | Slice 4 🔨 code-complete: CSV import end-to-end (presigned upload → S3 → import Lambda → transactions), FR-2.1–2.5. ADR-012 (natural key incl. balance) + ADR-013 (account label at upload) recorded from the owner's real Chase exports; architecture → v1.4. New `IngestConstruct`; 124 backend + 13 frontend tests. Deploy + live smoke-test via pipeline on merge (Option A) — those exit criteria stay open until then |
+| 1.0 | 2026-07-21 | Slice 4 ✅ deployed (PR #23 merged); owner smoke-tested live — same-file re-upload 0 added, overlapping export only new rows added (FR-2.2 confirmed end-to-end). All exit criteria met. `ledgerly-backlog.md` introduced (build-time observation inbox); B-1 (account picker, from the smoke test), B-2 (txn pagination/window), B-3 (frontend visual pass) seeded. Next: Slice 5 — AI categorization pipeline + eval harness |
