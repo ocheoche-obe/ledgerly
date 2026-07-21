@@ -34,6 +34,9 @@ Deployment: AWS, serverless-first (ADR-001).
   every significant choice.
 - **`docs/ledgerly-evaluation.md`** — lifecycle stage 6: metrics, retrospectives,
   and the findings that seed the next cycle.
+- **`docs/ledgerly-backlog.md`** — build-time observation inbox: papercuts, tech-debt,
+  small enhancements noticed mid-slice, awaiting triage into a slice / the plan's parking
+  lot / an ADR (not a second roadmap — items get promoted out).
 - **`docs/ledgerly-glossary.md`** — terms, services, cross-cloud parallels.
 - **`docs/ledgerly-reference.md`** — original scoping notes / brain-dump (frozen).
 
@@ -160,19 +163,22 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 4 — CSV import end-to-end: code-complete on branch `feat/slice4-csv-import`
-(2026-07-19); deploy + live smoke-test happen via the pipeline on merge (Option A, no
-workstation deploy). Next after merge: Slice 5 — AI categorization pipeline + eval harness.**
+**Slice 4 — CSV import end-to-end: complete & deployed (2026-07-21), PR [#23] merged (dev +
+prod). Owner smoke-tested live (same-file re-upload → 0 added; overlapping export → only new
+rows, FR-2.2 confirmed). Next: Slice 5 — AI categorization pipeline + eval harness.**
 
-- In progress: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions, FR-2.1–2.5.
-  New `IngestConstruct` (upload bucket + S3-triggered importer); `core/csv_normalize.py`
-  format-keyed parser (Chase checking); three-level idempotency (file hash / row natural key /
-  S3 redelivery). Two ADRs from the owner's real Chase exports: **ADR-012** (natural key
-  includes `balanceCents` so legit same-day/-amount/-merchant charges aren't collapsed) +
-  **ADR-013** (owner-confirmed account label at upload). Architecture → v1.4. 124 backend +
-  13 frontend tests; ruff clean; synth green (dev + prod). Everything lands **Uncategorized**
-  (categorization is Slice 5). **Frontend stays intentionally basic** (inline styles) — visual
-  pass still deferred.
+- Last completed: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions,
+  FR-2.1–2.5. New `IngestConstruct` (upload bucket + S3-triggered importer);
+  `core/csv_normalize.py` format-keyed parser (Chase checking); three-level idempotency
+  (file hash / row natural key / S3 redelivery). Two ADRs from the owner's real Chase
+  exports: **ADR-012** (natural key includes `balanceCents` so legit same-day/-amount/
+  -merchant charges aren't collapsed) + **ADR-013** (owner-confirmed account label at upload).
+  Architecture → v1.4. 124 backend + 13 frontend tests; ruff clean. Everything lands
+  **Uncategorized** (categorization is Slice 5). **New process:** `ledgerly-backlog.md` — a
+  build-time observation inbox — introduced this slice (first entry B-1: the import Account
+  field is free text with no registry → a first-class Accounts entity + dropdown picker,
+  since `accountId` is a dedupe-key component). **Frontend stays intentionally basic** (inline
+  styles) — visual pass deferred (backlog B-3).
 - Last completed: Slice 3 — `core/cycles.py` budget-cycle engine (cycle IDs/windows from the
   cadence history, clamped so no cycle straddles a change; change-effective-next-cycle,
   FR-4.2); categories CRUD + starter set (FR-4.1/4.4); settings cadence UI. 69 backend + 5
