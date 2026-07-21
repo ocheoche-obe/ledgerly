@@ -20,6 +20,19 @@ BUDGET_FORECAST_USD = 8
 # Owner contact for budget alerts. Sourced from the session context; change here if it moves.
 OWNER_EMAIL = "oche.ocheobe@gmail.com"
 
+# AI categorization (Slice 5, ADR-008). Config flows to the categorizer Lambda as env vars,
+# and the model ids also scope the Bedrock IAM grant — kept here so runtime config and the
+# least-privilege policy share one source. Switching the model (e.g. the eval's Sonnet 5 A/B)
+# is a change here + a redeploy, not a rewrite (the Categorizer interface is provider-agnostic).
+#
+# Opus 4.8 (and Sonnet 5) are **INFERENCE_PROFILE-only** on Bedrock — verified 2026-07-21 via
+# `bedrock list-foundation-models` — so `invoke_model` must target the inference-profile id
+# (`us.anthropic.…`), not the bare foundation-model id. The grant needs BOTH the profile ARN
+# and the underlying foundation-model ARN (cross-region inference fans out to sibling regions).
+BEDROCK_MODEL_ID = "us.anthropic.claude-opus-4-8"          # what invoke_model targets
+BEDROCK_FOUNDATION_MODEL = "anthropic.claude-opus-4-8"     # underlying FM, for the IAM grant
+CONFIDENCE_THRESHOLD = "0.8"
+
 
 @dataclass(frozen=True)
 class StageConfig:

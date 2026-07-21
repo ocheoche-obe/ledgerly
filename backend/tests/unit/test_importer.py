@@ -72,19 +72,38 @@ def env(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=BUCKET)
-        for mod in ("adapters.dynamo", "adapters.s3", "functions.importer.handler"):
+        queue_url = boto3.client("sqs", region_name="us-east-1").create_queue(
+            QueueName="ledgerly-categorize-test"
+        )["QueueUrl"]
+        monkeypatch.setenv("CATEGORIZE_QUEUE_URL", queue_url)
+        for mod in ("adapters.dynamo", "adapters.s3", "adapters.sqs", "functions.importer.handler"):
             sys.modules.pop(mod, None)
         dynamo = importlib.import_module("adapters.dynamo")
         s3 = importlib.import_module("adapters.s3")
         importer = importlib.import_module("functions.importer.handler")
-        yield _Env(dynamo, s3, importer)
+        yield _Env(dynamo, s3, importer, queue_url)
 
 
 class _Env:
-    def __init__(self, dynamo, s3, importer):
+    def __init__(self, dynamo, s3, importer, queue_url):
         self.dynamo = dynamo
         self.s3 = s3
         self.importer = importer
+        self.queue_url = queue_url
+
+    def drain_queue(self) -> list[dict]:
+        """All enqueued categorization messages, parsed — proves the import→categorize seam."""
+        sqs = boto3.client("sqs", region_name="us-east-1")
+        msgs: list[dict] = []
+        while True:
+            resp = sqs.receive_message(QueueUrl=self.queue_url, MaxNumberOfMessages=10)
+            batch = resp.get("Messages", [])
+            if not batch:
+                return msgs
+            for m in batch:
+                import json as _json
+                msgs.append(_json.loads(m["Body"]))
+                sqs.delete_message(QueueUrl=self.queue_url, ReceiptHandle=m["ReceiptHandle"])
 
     def start_import(self, sub, content, *, account_label="Chase 5980", import_id=None):
         """Create an import record, put the object in S3, and return (import_id, event)."""
@@ -166,3 +185,22 @@ def test_distinct_users_are_isolated(env):
     a = env.dynamo.query_transactions("sub-a", date_from="2026-07-01", date_to="2026-07-31")
     b = env.dynamo.query_transactions("sub-b", date_from="2026-07-01", date_to="2026-07-31")
     assert len(a) == 5 and len(b) == 5
+
+
+def test_import_enqueues_added_txns_for_categorization(env):
+    """The import→categorize seam (Slice 5): only the *added* rows are enqueued, as locate keys."""
+    _id, event = env.start_import("sub-1", FILE_A)
+    env.importer.handler(event, None)
+
+    messages = env.drain_queue()
+    keyed = [k for m in messages for k in m["txnKeys"]]
+    assert all(m["sub"] == "sub-1" for m in messages)
+    assert len(keyed) == 5                         # the 5 added rows
+    assert all(set(k) == {"date", "txnId"} for k in keyed)  # keys, not payloads
+
+
+def test_duplicate_file_enqueues_nothing(env):
+    env.run("sub-1", FILE_A)
+    env.drain_queue()                              # clear the first import's messages
+    env.run("sub-1", FILE_A)                       # whole-file duplicate → 0 added
+    assert env.drain_queue() == []

@@ -174,7 +174,7 @@ class ApiConstruct(Construct):
             handler=handler,
             code=_lambda.Code.from_asset(
                 str(_BACKEND_DIR),
-                exclude=["tests", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
+                exclude=["tests", "eval", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
             ),
             timeout=Duration.seconds(10),  # API λ budget (architecture §4.6)
             memory_size=256,

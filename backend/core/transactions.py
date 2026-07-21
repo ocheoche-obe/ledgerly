@@ -14,11 +14,40 @@ from __future__ import annotations
 
 # categoryStatus enum (architecture §2.6): auto | confirmed | corrected | uncategorized
 STATUS_UNCATEGORIZED = "uncategorized"
+STATUS_AUTO = "auto"            # categorized by the pipeline (rule or LLM), Slice 5 (FR-3)
+STATUS_CONFIRMED = "confirmed"  # owner confirmed the auto category, Slice 7 (FR-6.3)
+STATUS_CORRECTED = "corrected"  # owner changed the category, Slice 7 (FR-3.4/6.2)
+
+# Statuses the categorizer must never overwrite — the owner's own decisions win over any
+# re-run of the pipeline (architecture §3.2 guard; makes re-processing correction-preserving).
+OWNER_SET_STATUSES = (STATUS_CONFIRMED, STATUS_CORRECTED)
 
 
 def txn_sk(date: str, txn_id: str) -> str:
     """Sort key ``TXN#<date>#<txnId>`` — date-ordered within the user partition (§2.4)."""
     return f"TXN#{date}#{txn_id}"
+
+
+def gsi1_keys(sub: str, category_id: str, date: str, txn_id: str) -> dict:
+    """GSI1 keys for category drill-down (AP 8) — present once a txn has a category.
+
+    ``gsi1pk = USER#<sub>#CAT#<catId>`` / ``gsi1sk = TXN#<date>#<txnId>`` (architecture §2.4).
+    """
+    return {
+        "gsi1pk": f"USER#{sub}#CAT#{category_id}",
+        "gsi1sk": txn_sk(date, txn_id),
+    }
+
+
+def gsi2_keys(sub: str, date: str, txn_id: str) -> dict:
+    """GSI2 keys for the review queue (AP 9), sparse — present only while ``needsReview``.
+
+    ``gsi2pk = USER#<sub>#REVIEW`` / ``gsi2sk = TXN#<date>#<txnId>`` (architecture §2.4).
+    """
+    return {
+        "gsi2pk": f"USER#{sub}#REVIEW",
+        "gsi2sk": txn_sk(date, txn_id),
+    }
 
 
 def to_item(normalized: dict, *, import_id: str) -> dict:
@@ -50,5 +79,8 @@ def txn_view(item: dict) -> dict:
         "merchantNormalized": item.get("merchantNormalized", ""),
         "categoryId": item.get("categoryId"),
         "categoryStatus": item.get("categoryStatus", STATUS_UNCATEGORIZED),
+        # confidence is a float; needsReview surfaces the txn in the review queue (Slice 7).
+        "confidence": float(item["confidence"]) if item.get("confidence") is not None else None,
+        "needsReview": bool(item.get("needsReview", False)),
         "importId": item.get("importId", ""),
     }

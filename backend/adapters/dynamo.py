@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -15,16 +16,25 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from core.categories import (
+    STATUS_ACTIVE,
     category_view,
     clean_name,
     new_category,
     starter_categories,
     validate_status,
 )
+from core.categorize import Decision
 from core.cycles import plan_cadence_change
 from core.imports import import_view, new_import
+from core.merchant_rules import rule_sk
 from core.settings import default_profile, settings_view
-from core.transactions import txn_sk, txn_view
+from core.transactions import (
+    OWNER_SET_STATUSES,
+    gsi1_keys,
+    gsi2_keys,
+    txn_sk,
+    txn_view,
+)
 
 _TABLE_NAME = os.environ["TABLE_NAME"]
 _dynamodb = boto3.resource(
@@ -320,3 +330,102 @@ def query_transactions(sub: str, *, date_from: str, date_to: str, limit: int = 5
         Limit=limit,
     ).get("Items", [])
     return [txn_view(i) for i in items]
+
+
+# --- categorization (Slice 5, FR-3) ----------------------------------------------------
+
+
+def list_category_choices(sub: str) -> list[dict]:
+    """The owner's *active* categories as ``[{categoryId, name}]`` for the categorizer prompt.
+
+    Read-only (no starter seeding — that's the API path's job): the categorizer maps against
+    whatever categories exist. Archived categories are excluded — the model must not assign a
+    transaction to a bucket the owner has retired.
+    """
+    items = _table.query(
+        KeyConditionExpression=Key("pk").eq(_pk(sub)) & Key("sk").begins_with("CAT#"),
+        ProjectionExpression="categoryId, #n, #s",
+        ExpressionAttributeNames={"#n": "name", "#s": "status"},
+    ).get("Items", [])
+    return [
+        {"categoryId": i["categoryId"], "name": i["name"]}
+        for i in items
+        if i.get("status", STATUS_ACTIVE) == STATUS_ACTIVE
+    ]
+
+
+def get_rule(sub: str, normalized_merchant: str) -> dict | None:
+    """AP 13 — the merchant rule for a normalized merchant, or None. The categorizer's
+    free/fast path: a hit skips the LLM (FR-3.4). Empty this slice (rules land in Slice 7)."""
+    return _table.get_item(Key={"pk": _pk(sub), "sk": rule_sk(normalized_merchant)}).get("Item")
+
+
+def get_transaction(sub: str, date_str: str, txn_id: str) -> dict | None:
+    """The stored transaction item (raw, with key attributes) — the categorizer reads the
+    merchant/description to categorize and re-checks status for idempotency."""
+    return _table.get_item(Key={"pk": _pk(sub), "sk": txn_sk(date_str, txn_id)}).get("Item")
+
+
+def apply_categorization(sub: str, date_str: str, txn_id: str, decision: Decision) -> bool:
+    """AP 10 (pipeline write) — persist a :class:`Decision` onto a transaction (FR-3).
+
+    Sets category/status/confidence/needsReview and maintains the derived indexes: GSI1
+    (category drill-down) present iff a category was assigned; GSI2 (review queue) present iff
+    ``needsReview``. **Correction-preserving** (architecture §3.2): a conditional guard skips
+    the write when the owner has already ``confirmed``/``corrected`` the txn, so a message
+    replay (SQS at-least-once) can never clobber a human decision. Returns True if applied,
+    False if the guard skipped it.
+    """
+    sets: dict[str, object] = {
+        "categoryId": decision.category_id,  # None → stored as NULL (uncategorized)
+        "categoryStatus": decision.status,
+        "confidence": Decimal(str(decision.confidence)),
+        "needsReview": decision.needs_review,
+    }
+    removes: list[str] = []
+
+    if decision.category_id is not None:
+        sets.update(gsi1_keys(sub, decision.category_id, date_str, txn_id))
+    else:
+        removes += ["gsi1pk", "gsi1sk"]
+    if decision.needs_review:
+        sets.update(gsi2_keys(sub, date_str, txn_id))
+    else:
+        removes += ["gsi2pk", "gsi2sk"]
+
+    names: dict[str, str] = {}
+    values: dict[str, object] = {}
+    set_parts: list[str] = []
+    for i, (attr, val) in enumerate(sets.items()):
+        names[f"#s{i}"] = attr
+        values[f":s{i}"] = val
+        set_parts.append(f"#s{i} = :s{i}")
+    remove_parts: list[str] = []
+    for i, attr in enumerate(removes):
+        names[f"#r{i}"] = attr
+        remove_parts.append(f"#r{i}")
+
+    expr = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        expr += " REMOVE " + ", ".join(remove_parts)
+
+    # Guard: never overwrite an owner decision (confirmed/corrected). Absent status (shouldn't
+    # happen — importer sets uncategorized) is also allowed through.
+    names["#cs"] = "categoryStatus"
+    values[":confirmed"] = OWNER_SET_STATUSES[0]
+    values[":corrected"] = OWNER_SET_STATUSES[1]
+    condition = "attribute_not_exists(#cs) OR (#cs <> :confirmed AND #cs <> :corrected)"
+
+    try:
+        _table.update_item(
+            Key={"pk": _pk(sub), "sk": txn_sk(date_str, txn_id)},
+            UpdateExpression=expr,
+            ConditionExpression=condition,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except ClientError as err:
+        if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False  # owner already decided — preserve it
+        raise
