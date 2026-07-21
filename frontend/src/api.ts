@@ -70,6 +70,8 @@ export interface Transaction {
   merchantNormalized: string;
   categoryId: string | null;
   categoryStatus: string;
+  confidence: number | null;
+  needsReview: boolean;
   importId: string;
 }
 

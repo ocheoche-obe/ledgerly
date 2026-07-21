@@ -139,6 +139,7 @@ export default function App() {
           {api && txns ? (
             <TransactionsPanel
               transactions={txns.transactions}
+              categories={categories ?? []}
               from={txns.from}
               to={txns.to}
             />

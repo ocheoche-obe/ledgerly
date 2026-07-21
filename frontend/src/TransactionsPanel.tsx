@@ -1,19 +1,23 @@
-import { formatCents, type Transaction } from "./api";
+import { formatCents, type Category, type Transaction } from "./api";
 import { styles } from "./styles";
 
-// A basic transaction list (FR-2) proving imports landed — date, description, account, and
-// signed amount for the default window. Filters, search, and category drill-down come in
-// Slice 7; categorization (the Category column would show) is Slice 5, so everything reads
-// Uncategorized for now.
+// A basic transaction list (FR-2) proving imports landed — date, description, account, signed
+// amount, and the auto-assigned Category (Slice 5). The Category cell reflects the async
+// pipeline: a row reads "Uncategorized" until the categorizer runs (~seconds after import),
+// then shows the category name — with a "review" tag when the model's confidence was low.
+// Filters, search, and category drill-down come in Slice 7.
 export function TransactionsPanel({
   transactions,
+  categories,
   from,
   to,
 }: {
   transactions: Transaction[];
+  categories: Category[];
   from: string;
   to: string;
 }) {
+  const nameById = new Map(categories.map((c) => [c.categoryId, c.name]));
   return (
     <section style={styles.card}>
       <h2 style={styles.sectionTitle}>Transactions</h2>
@@ -32,6 +36,7 @@ export function TransactionsPanel({
                 <th style={styles.th}>Date</th>
                 <th style={styles.th}>Description</th>
                 <th style={styles.th}>Account</th>
+                <th style={styles.th}>Category</th>
                 <th style={{ ...styles.th, textAlign: "right" }}>Amount</th>
               </tr>
             </thead>
@@ -41,6 +46,16 @@ export function TransactionsPanel({
                   <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{t.date}</td>
                   <td style={styles.td}>{t.descriptionRaw}</td>
                   <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{t.accountId}</td>
+                  <td style={styles.td}>
+                    {t.categoryId ? (
+                      <>
+                        {nameById.get(t.categoryId) ?? t.categoryId}
+                        {t.needsReview && <span style={styles.muted}> · review</span>}
+                      </>
+                    ) : (
+                      <span style={styles.muted}>Uncategorized</span>
+                    )}
+                  </td>
                   <td
                     style={{
                       ...styles.td,
