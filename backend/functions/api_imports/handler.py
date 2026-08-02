@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from adapters.dynamo import create_import, get_import, list_imports
 from adapters.s3 import generate_upload_url, upload_key
@@ -63,7 +63,7 @@ def _create(sub: str, event: dict) -> dict:
         account_label=account_label,
         account_id=account_id,
         object_key=upload_key(sub, import_id),
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     upload_url = generate_upload_url(sub, import_id)
     logger.info(json.dumps({"route": "POST /imports", "sub": sub, "importId": import_id}))

@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
 
 from adapters.dynamo import get_or_create_settings, update_cadence
-from core.cycles import cycle_for
+from core.cycles import cycle_for, today_utc
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -54,7 +53,7 @@ def handler(event: dict, context) -> dict:
 
 def _with_current_cycle(view: dict) -> dict:
     """Attach the cycle in force today, derived from the cadence history."""
-    return {**view, "currentCycle": cycle_for(view["cadences"], date.today()).as_view()}
+    return {**view, "currentCycle": cycle_for(view["cadences"], today_utc()).as_view()}
 
 
 def _sub_from_event(event: dict) -> str | None:

@@ -14,6 +14,7 @@ import re
 from datetime import date, timedelta
 
 from adapters.dynamo import query_transactions
+from core.cycles import today_utc
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -47,7 +48,7 @@ def handler(event: dict, context) -> dict:
 
 def _window(raw_from: str | None, raw_to: str | None) -> tuple[str, str]:
     """Resolve the [from, to] window, defaulting to the last ~45 days. Validates ISO dates."""
-    today = date.today()
+    today = today_utc()
     date_to = _valid_date(raw_to, "to") if raw_to else today.isoformat()
     date_from = (
         _valid_date(raw_from, "from") if raw_from

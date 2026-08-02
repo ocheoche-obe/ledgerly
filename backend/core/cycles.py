@@ -24,9 +24,21 @@ cycle ID (e.g. a truncated ``M#2026-09``), so IDs stay stable and meaningful dow
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 BIWEEKLY_DAYS = 14
+
+
+def today_utc() -> date:
+    """The calendar date "now" resolves to, evaluated in UTC.
+
+    Cycle membership is a date question ("which cycle am I in?"), so the answer must not
+    depend on the host's local timezone: a `date.today()` on a machine west of UTC reports
+    yesterday for part of each day, which near a cycle boundary silently attributes activity
+    to the wrong cycle. Lambda already runs UTC, so this is a no-op in production and makes
+    local runs and tests agree with it.
+    """
+    return datetime.now(UTC).date()
 
 
 @dataclass(frozen=True)
@@ -111,12 +123,10 @@ def cycle_for(cadences: list[dict], on: date) -> Cycle:
     # clamps its front, where a real predecessor owns the earlier dates.
     if idx > 0:
         lo = _parse(active["effectiveFrom"])
-        if start < lo:
-            start = lo
+        start = max(start, lo)
     if idx + 1 < len(ordered):
         hi = _parse(ordered[idx + 1]["effectiveFrom"]) - timedelta(days=1)
-        if end > hi:
-            end = hi
+        end = min(end, hi)
     return Cycle(cycle_id=cycle_id, kind=kind, start=start, end=end)
 
 
@@ -157,7 +167,7 @@ def plan_cadence_change(
     if kind == "biweekly":
         if anchor is None:
             raise ValueError("biweekly cadence requires an anchor date")
-        effective_from = anchor if anchor >= boundary else boundary
+        effective_from = max(anchor, boundary)
         entry = {
             "kind": "biweekly",
             "anchor": anchor.isoformat(),

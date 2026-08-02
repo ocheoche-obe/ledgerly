@@ -24,7 +24,7 @@ from core.categories import (
     validate_status,
 )
 from core.categorize import Decision
-from core.cycles import plan_cadence_change
+from core.cycles import plan_cadence_change, today_utc
 from core.imports import import_view, new_import
 from core.merchant_rules import rule_sk
 from core.settings import default_profile, settings_view
@@ -95,7 +95,7 @@ def update_cadence(sub: str, *, kind: str, anchor: str | None = None) -> dict:
 
     anchor_date = date.fromisoformat(anchor) if anchor else None
     new_cadences = plan_cadence_change(
-        profile["cadences"], kind=kind, anchor=anchor_date, today=date.today()
+        profile["cadences"], kind=kind, anchor=anchor_date, today=today_utc()
     )
     updated = _table.update_item(
         Key=key,

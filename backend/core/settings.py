@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from core.cycles import today_utc
+
 DEFAULT_CADENCE_KIND = "monthly"  # FR-4.2 default cadence
 
 
@@ -33,5 +35,5 @@ def settings_view(profile: dict) -> dict:
 
 
 def _first_of_month_today() -> str:
-    today = date.today()
+    today = today_utc()
     return date(today.year, today.month, 1).isoformat()

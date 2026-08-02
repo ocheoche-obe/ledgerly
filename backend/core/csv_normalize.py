@@ -87,7 +87,9 @@ def _normalize_chase_row(row: dict, *, account_id: str) -> dict:
         raise ValueError("missing required column (Posting Date/Description/Amount/Balance)")
 
     try:
-        iso_date = datetime.strptime(posting_date, "%m/%d/%Y").date().isoformat()
+        # A statement's posting date is a bank-local calendar date, not an instant: there is
+        # no zone in the export to parse, and the time part is discarded immediately anyway.
+        iso_date = datetime.strptime(posting_date, "%m/%d/%Y").date().isoformat()  # noqa: DTZ007
     except ValueError as err:
         raise ValueError(f"invalid date: {posting_date!r} (expected MM/DD/YYYY)") from err
 

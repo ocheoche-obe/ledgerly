@@ -1,7 +1,16 @@
 # Backend dev/test tooling — NOT shipped to Lambda (the runtime provides boto3, and core/
 # has no third-party runtime deps). Dependabot tracks this manifest for the /backend dir.
-pytest>=9.1.1,<10
-ruff>=0.15.21,<1.0
+#
+# Ranges are bounded to a *compatible minor*, not just a major. Rationale: CI installs from
+# this file on every run, so an unbounded minor lets a tool change behaviour under us with no
+# commit and no review. Ruff 0.16.0 did exactly that on 2026-08-01 — it broadened its default
+# rule set, put 31 new violations on an untouched `main`, and reddened all nine open PRs at
+# once (including ones that touched no Python). Dependabot still proposes every bump; the
+# bound only forces it to arrive as one reviewable PR instead of a silent Tuesday breakage.
+pytest>=9.1.1,<9.2
+# Ruff is pre-1.0: minor releases may change the default rule set, which *is* the gate here
+# (ruff.toml selects no explicit rule list). Keep this bound tight and bump deliberately.
+ruff>=0.16.0,<0.17
 # moto mocks DynamoDB + S3 in-process so backend/adapters can be tested without real AWS
 # (S3 is the CSV upload bucket added in Slice 4).
-moto[dynamodb,s3]>=5.0,<6
+moto[dynamodb,s3]>=5.2.2,<5.3
