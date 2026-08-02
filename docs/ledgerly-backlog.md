@@ -46,6 +46,8 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-2 | Transaction list has no pagination + a fixed default window | Slice 4 | tech-debt / UX | 🔎 | Slice 7 (filters/search) |
 | B-3 | Frontend is intentionally basic (inline styles) — visual pass deferred | Slice 1 | UX / polish | 🔎 | later (dedicated polish pass) |
 | B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
+| B-5 | Dependabot's two **pip** groups don't actually group — one PR per package | 2026-08 wave | process / noise | 🆕 | verify at the next monthly run |
+| B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | 🆕 | next infra-touching slice |
 
 ---
 
@@ -125,6 +127,72 @@ categorizer drop a rule whose category is no longer active (mirroring the LLM va
 
 **Refs:** `backend/functions/categorizer/handler.py`; `backend/core/categorize/__init__.py`
 (`decide_rule_hit` vs `decide_llm`); relates to FR-4.5 (archive/reassignment, Slice 7).
+
+---
+
+### B-5 — The two pip Dependabot groups aren't grouping 🆕
+
+**Noticed:** 2026-08-01 wave (triage). **Type:** process / noise. **Likely home:** verify at the
+next monthly run.
+
+`dependabot.yml` defines `backend-minor-patch` and `infra-minor-patch`, both keyed on
+`update-types: [minor, patch]`. Neither fired: the wave produced **one PR per package** —
+#26 (ruff) and #27 (moto) separately from `/backend`, #29 (constructs) and #30 (aws-cdk-lib)
+separately from `/infra`. The npm and github-actions groups worked correctly in the same wave
+(#28 react, #31 vite, #33 in `actions-minor-patch`), so grouping is not broken in general.
+
+**Not yet root-caused, and worth saying so rather than guessing.** The obvious difference is that
+both pip manifests use **range** requirements (`>=x,<y`), for which Dependabot emits
+"Update X requirement from…" PRs rather than "Bump X from…". The plausible mechanism is that
+these requirement-updates aren't classified into the semver `update-types` buckets a group keyed
+only on `update-types` needs — but `actions-minor-patch` is *also* keyed only on `update-types`
+and did group, so that story is incomplete. A competing explanation for #26 specifically:
+ruff is `0.x`, and Dependabot may treat `0.15 → 0.16` as semver-**major**, which would correctly
+exclude it from a minor/patch group. That doesn't explain #27/#29/#30.
+
+**The experiment** (cheap, one line each): add `patterns: ["*"]` to both pip groups so membership
+is pattern-based rather than update-type-based, and see whether next month's run produces one PR
+per pip directory. If majors then group too, that's arguably *right* for `/infra` — aws-cdk-lib
+and constructs are coupled and should move together, the same reasoning behind the existing
+react and vite groups.
+
+**Why it's not urgent:** the failure mode is PR *volume*, not broken updates. Each solo PR is
+individually valid and mergeable.
+
+**Refs:** `.github/dependabot.yml`; the 2026-08 wave (#26–#34); `.claude/skills/dependabot-triage`.
+
+---
+
+### B-6 — `infra/requirements.txt` still has the exposure just fixed in `backend/` 🆕
+
+**Noticed:** 2026-08-01 wave (triage). **Type:** tech-debt / reproducibility. **Likely home:**
+the next infra-touching slice.
+
+#35 tightened `backend/requirements-dev.txt` to compatible-minor bounds after ruff 0.16's
+broadened defaults reddened `main` and every open PR at once. `infra/requirements.txt` still
+carries the same shape:
+
+```
+aws-cdk-lib>=2.261.0,<3.0.0
+constructs>=10.7.0,<11.0.0
+```
+
+There is no lockfile, so CI resolves the newest matching release on every run — during this
+triage it installed **2.263.0 / 10.8.0**, well past the floors #29/#30 were proposing. The risk
+is sharper than it was for a linter: `aws-cdk-lib` **generates the CloudFormation templates we
+deploy**. A minor release can legitimately change synthesized output (new defaults, changed
+logical-ID or metadata emission), which means the `cdk diff` reviewed locally and the templates
+CI actually deploys can be produced by *different library versions* — silently weakening the
+ADR-004 "review `cdk diff` before every deploy" habit.
+
+Not observed to have caused a problem: the 2.261 → 2.263 bump showed no property drift when
+diffed against the live dev stack during this triage.
+
+**Fix when convenient:** bound to a compatible minor (`>=2.263.0,<2.264`) as `/backend` now is, or
+adopt a proper lockfile (`pip-compile`/`uv`) for infra. The lockfile is the better end state
+since infra is deploy-critical; the bound is the five-minute version.
+
+**Refs:** `infra/requirements.txt`; #35; ADR-004; relates to [B-5].
 
 ---
 
