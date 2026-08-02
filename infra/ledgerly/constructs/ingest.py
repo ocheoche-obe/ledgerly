@@ -11,7 +11,6 @@ minimize how long raw financial data sits in S3. After persisting, the importer 
 newly-added rows onto the categorization queue (owned by `CategorizationConstruct`, Slice 5) —
 this construct is the *producer* (send-only); the consumer + queue live there.
 """
-from pathlib import Path
 
 from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_dynamodb as ddb
@@ -22,10 +21,10 @@ from aws_cdk import aws_s3_notifications as s3n
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
+from ledgerly.backend_asset import backend_code
 from ledgerly.config import StageConfig
 
 # repo-root/backend — the Lambda asset root (handler + core + adapters live here).
-_BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
 
 _RETENTION = {
     30: logs.RetentionDays.ONE_MONTH,
@@ -83,10 +82,7 @@ class IngestConstruct(Construct):
             function_name=f"ledgerly-{stage.name}-importer",
             runtime=_lambda.Runtime.PYTHON_3_13,
             handler="functions.importer.handler.handler",
-            code=_lambda.Code.from_asset(
-                str(_BACKEND_DIR),
-                exclude=["tests", "eval", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
-            ),
+            code=backend_code(),
             timeout=Duration.minutes(2),  # import λ budget (architecture §4.6)
             memory_size=512,
             environment={

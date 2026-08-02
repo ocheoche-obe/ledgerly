@@ -11,7 +11,6 @@ grants. **Zero runtime secrets** (ADR-008): the Lambda calls Bedrock and DynamoD
 role — the Bedrock grant is scoped to the one model family it runs. The import Lambda (in
 `IngestConstruct`) is granted send access + the queue URL separately, since it is the producer.
 """
-from pathlib import Path
 
 from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_cloudwatch as cloudwatch
@@ -23,6 +22,7 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
+from ledgerly.backend_asset import backend_code
 from ledgerly.config import (
     BEDROCK_FOUNDATION_MODEL,
     BEDROCK_MODEL_ID,
@@ -31,7 +31,6 @@ from ledgerly.config import (
 )
 
 # repo-root/backend — the Lambda asset root (handler + core + adapters live here).
-_BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
 
 _RETENTION = {
     30: logs.RetentionDays.ONE_MONTH,
@@ -86,10 +85,7 @@ class CategorizationConstruct(Construct):
             function_name=f"ledgerly-{stage.name}-categorizer",
             runtime=_lambda.Runtime.PYTHON_3_13,
             handler="functions.categorizer.handler.handler",
-            code=_lambda.Code.from_asset(
-                str(_BACKEND_DIR),
-                exclude=["tests", "eval", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
-            ),
+            code=backend_code(),
             timeout=Duration.minutes(5),  # categorizer λ budget — Bedrock w/ retry (arch §4.6)
             memory_size=512,
             environment={
