@@ -166,6 +166,12 @@ _Solidified at the end of Slice 1. Binding:_
 - **Code review:** `/code-review medium` runs at `/wrap-slice` (step 3) as an **advisory**
   (non-blocking) correctness pass — adopted Slice 3 after a trial found real bugs CI + tests
   + security-review missed. Triage findings; a false positive never blocks a slice.
+- **Deployed ≠ working (learned the hard way, Slice 5):** the pipeline deploys code; it does not
+  *exercise* it. A slice whose exit criteria include live behaviour is **not done until someone
+  runs those criteria against the deployed stack** — a green `deploy.yml` is not evidence the
+  feature works. Slice 5 sat "deployed" for 12 days while every categorizer invocation failed on
+  an ungranted Bedrock model agreement, because nobody ran the ☐ items. Option A ("deploy via the
+  pipeline on merge") is a *shipping* strategy, not a *verification* strategy.
 - **Who merges (owner decision, 2026-08-02):** `Bash(gh pr merge:*)` is allowlisted in
   `.claude/settings.local.json`, so Claude *can* merge — but the permission is a capability, not
   a licence. The split is by **kind of PR**, and it is a judgement call Claude makes, since no
