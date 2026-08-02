@@ -38,3 +38,6 @@ infra/*-outputs.json
 
 # AWS local creds (never commit)
 .aws/
+
+# Claude Code personal overrides (permissions allowlist) — not team config
+.claude/settings.local.json

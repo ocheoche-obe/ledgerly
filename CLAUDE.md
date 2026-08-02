@@ -166,6 +166,18 @@ _Solidified at the end of Slice 1. Binding:_
 - **Code review:** `/code-review medium` runs at `/wrap-slice` (step 3) as an **advisory**
   (non-blocking) correctness pass — adopted Slice 3 after a trial found real bugs CI + tests
   + security-review missed. Triage findings; a false positive never blocks a slice.
+- **Who merges (owner decision, 2026-08-02):** `Bash(gh pr merge:*)` is allowlisted in
+  `.claude/settings.local.json`, so Claude *can* merge — but the permission is a capability, not
+  a licence. The split is by **kind of PR**, and it is a judgement call Claude makes, since no
+  permission rule can distinguish them:
+  - **Slice PRs — owner merges.** Anything from `/wrap-slice`, i.e. feature work with an exit-
+    criteria checklist. Claude opens the PR, gets CI green, and stops. Reviewing the slice *is*
+    the owner's checkpoint on the build; auto-merging would erase it.
+  - **Cleanup PRs — Claude may merge once CI is green.** Dependency waves, CI/lint repairs,
+    infra hygiene, docs/backlog entries. No new product behaviour, and the diff is mechanical
+    or self-evident from the PR body.
+  - When it isn't obvious which bucket a PR is in, ask. Anything that changes deploy behaviour,
+    IAM, or data handling is a slice PR regardless of how small the diff looks.
 
 ## Cost constraints
 
@@ -178,12 +190,29 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 5 — AI categorization pipeline + eval harness: 🔨 code-complete (2026-07-21), not yet
-deployed. Async pipeline (SQS+DLQ → categorizer Lambda → merchant rules → Bedrock Claude Opus
-4.8) + eval harness. 164 backend + 13 frontend tests, ruff clean, `cdk synth` green dev+prod.
-Deploy + live smoke + eval baseline land via the pipeline on merge (Option A). Next: run
-`/wrap-slice` (security-review + code-review + commit + PR), then owner provides a labeled
-transaction sample for the accuracy baseline.**
+**Slice 5 — AI categorization pipeline + eval harness: 🔨 deployed to dev + prod (2026-07-21, PR
+#25) but ⛔ NOT WORKING. Live-tested 2026-08-02: every categorizer invocation since deploy fails
+with `AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account` —
+account-level Bedrock model access was never granted (confirmed outside the Lambda with admin
+credentials; both Opus 4.8 and Sonnet 5 denied). BLOCKED ON OWNER: accept the model agreement
+(`bedrock create-foundation-model-agreement`, or the console's Model access page) — it is
+acceptance of commercial terms, so not automatable.**
+
+**What live-testing proved works:** presign → S3 → importer → 8/8 rows persisted + enqueued; and
+the failure path exactly as designed — 3 receives 360s apart → DLQ with all keys intact, and every
+transaction left `uncategorized`/NULL `categoryId`. FR-3.5's promise (a model outage leaves data
+*un-filed*, never *mis-filed*) is proven on real infrastructure.
+
+**Two things to carry forward:** (1) **[B-7] is a Slice 6 blocker** — 153 real transactions from
+Slice 4 can never be categorized (the importer enqueues only newly-added rows; ADR-012 idempotency
+means a re-import adds 0), so the dashboard would render every category at $0 on real data. Needs
+a re-drive path first. (2) **Eval baseline deferred by owner → [B-8]**; note the 0.8 confidence
+threshold is therefore still an unvalidated guess.
+
+**Process lesson:** "deploy + live smoke land via the pipeline on merge (Option A)" conflated
+*deployed* with *working*. The pipeline deploys code, it does not exercise it; a green deploy was
+read as evidence the feature worked and the gap stood for 12 days. **A slice with live exit
+criteria is not done until someone runs them against the deployed stack.**
 
 - Last completed (code): Slice 5 — `core/categorize/` (Categorizer interface + §3.2 decision
   matrix + prompt/forced-tool contract), `core/merchant_rules.py` (RULE# read seam),
