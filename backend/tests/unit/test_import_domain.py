@@ -13,7 +13,6 @@ from core.imports import (
 )
 from core.transactions import STATUS_UNCATEGORIZED, to_item, txn_sk, txn_view
 
-
 # --- account identity (ADR-013) --------------------------------------------------------
 
 @pytest.mark.parametrize(

@@ -124,18 +124,20 @@ def test_quoted_description_with_comma_is_preserved():
 # --- txnId natural key (ADR-012) -------------------------------------------------------
 
 def test_compute_txn_id_is_deterministic():
-    kwargs = dict(account_id="a", date="2026-07-03", amount_cents=-675,
-                  description_raw="COFFEE", balance_cents=123256)
+    kwargs = {"account_id": "a", "date": "2026-07-03", "amount_cents": -675,
+              "description_raw": "COFFEE", "balance_cents": 123256}
     assert compute_txn_id(**kwargs) == compute_txn_id(**kwargs)
 
 
 def test_balance_changes_the_txn_id():
-    base = dict(account_id="a", date="2026-07-03", amount_cents=-3176, description_raw="MIRRA")
+    base = {"account_id": "a", "date": "2026-07-03", "amount_cents": -3176,
+            "description_raw": "MIRRA"}
     assert compute_txn_id(**base, balance_cents=328511) != compute_txn_id(**base, balance_cents=331687)
 
 
 def test_account_id_changes_the_txn_id():
-    base = dict(date="2026-07-03", amount_cents=-675, description_raw="X", balance_cents=100)
+    base = {"date": "2026-07-03", "amount_cents": -675, "description_raw": "X",
+            "balance_cents": 100}
     assert compute_txn_id(account_id="a", **base) != compute_txn_id(account_id="b", **base)
 
 

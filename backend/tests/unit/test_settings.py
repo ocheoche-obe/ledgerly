@@ -1,6 +1,7 @@
 """Unit tests for the pure settings domain (no AWS)."""
 from datetime import date
 
+from core.cycles import today_utc
 from core.settings import default_profile, settings_view
 
 
@@ -12,7 +13,7 @@ def test_default_profile_is_monthly_with_given_effective_date():
 
 def test_default_profile_defaults_to_first_of_current_month():
     profile = default_profile()
-    today = date.today()
+    today = today_utc()
     expected = date(today.year, today.month, 1).isoformat()
     assert profile["cadences"][0] == {"kind": "monthly", "effectiveFrom": expected}
 

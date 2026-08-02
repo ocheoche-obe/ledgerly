@@ -15,7 +15,6 @@ from core.categories import (
 )
 from core.ids import new_ulid
 
-
 # --- name validation -------------------------------------------------------------------
 
 @pytest.mark.parametrize(

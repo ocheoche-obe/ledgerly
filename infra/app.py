@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Ledgerly CDK app entrypoint.
 
 One CDK app, one stack per stage (Ledgerly-dev, Ledgerly-prod), each composed of

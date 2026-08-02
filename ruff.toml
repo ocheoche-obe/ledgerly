@@ -1,6 +1,35 @@
 # Repo-wide Python lint config for backend/ and infra/ (the two Python roots).
-# Ruff is the project's Python linter; CI runs `ruff check backend infra`. We keep ruff's
-# default rule set (pyflakes + a conservative pycodestyle subset) so the gate stays high-
-# signal rather than style-nagging. Introduced in Slice 1 — no linter existed before.
+# Ruff is the project's Python linter; CI runs `ruff check backend infra`. We ride ruff's
+# default rule set so the gate stays high-signal rather than style-nagging. Introduced in
+# Slice 1 — no linter existed before.
+#
+# Note: "ruff's defaults" is a moving target — 0.16.0 broadened the default rules and turned
+# a green `main` red across every open PR at once. `backend/requirements-dev.txt` therefore
+# pins ruff to a compatible minor so a default-set change arrives as one reviewable bump
+# rather than a surprise. Rules deliberately switched off are listed (with why) below.
 target-version = "py313"
 line-length = 100
+
+[lint]
+ignore = [
+    # TRY004 ("prefer TypeError for invalid type") fights a deliberate project convention:
+    # ValueError is the single validation-failure protocol across the core/ → handler seam.
+    # Handlers catch ValueError and map it to HTTP 400 (see api_settings/api_categories/
+    # api_imports); raising TypeError for bad *types* would escape those handlers and turn a
+    # clean 400 into a 500. `test_patch_settings_non_object_cadence_is_400` pins that
+    # behaviour. Revisit only if the seam adopts typed exception classes.
+    "TRY004",
+]
+
+[lint.per-file-ignores]
+# CSV fixtures are built as `"\n".join([...])` with one list element per statement row —
+# that shape *is* the readability. FLY002 would collapse them into f-strings full of escaped
+# newlines and embedded quotes, which is strictly worse for a fixture you read as a table.
+"backend/tests/**" = ["FLY002"]
+
+[lint.isort]
+# Keep the architectural seam visible in every import block: core/ (pure domain), adapters/
+# (AWS-facing) and functions/ (handlers) are first-party, so they group separately from
+# boto3 & friends rather than sorting in among them. `ledgerly` is the infra/ CDK package —
+# same reasoning, so it doesn't sort in among aws_cdk/constructs.
+known-first-party = ["core", "adapters", "functions", "ledgerly"]
