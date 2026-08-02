@@ -14,7 +14,6 @@ resources (NFR-4.4). The imports Lambda additionally gets `s3:PutObject` on the 
 so the presigned URLs it mints are usable. Business identity is read from the verified JWT
 claims inside each handler (FR-1.3).
 """
-from pathlib import Path
 
 from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_apigatewayv2 as apigwv2
@@ -27,10 +26,10 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
+from ledgerly.backend_asset import backend_code
 from ledgerly.config import StageConfig
 
 # repo-root/backend — the Lambda asset root (handler + core + adapters live here).
-_BACKEND_DIR = Path(__file__).resolve().parents[3] / "backend"
 
 _RETENTION = {
     30: logs.RetentionDays.ONE_MONTH,
@@ -172,10 +171,7 @@ class ApiConstruct(Construct):
             function_name=function_name,
             runtime=_lambda.Runtime.PYTHON_3_13,
             handler=handler,
-            code=_lambda.Code.from_asset(
-                str(_BACKEND_DIR),
-                exclude=["tests", "eval", "**/__pycache__", "**/*.pyc", "pyproject.toml", "*.md"],
-            ),
+            code=backend_code(),
             timeout=Duration.seconds(10),  # API λ budget (architecture §4.6)
             memory_size=256,
             environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO", **(extra_env or {})},
