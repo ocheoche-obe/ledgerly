@@ -54,7 +54,7 @@ _Approved 2026-07-13 (architecture doc v1.1; ADR-001…009 all Accepted):_
   cycle-keyed budgets (ADR-005) · `USER#<sub>` partition scoping, multi-tenant-ready
   (ADR-006) · Cognito + API Gateway HTTP API JWT authorizer (ADR-007).
 - **AI pipeline:** SQS + DLQ (ADR-009) → categorizer Lambda → merchant rules first, then
-  Claude Opus 4.8 via Amazon Bedrock with structured output (ADR-008). **Zero runtime
+  Claude Sonnet 4.6 via Amazon Bedrock with structured output (ADR-008 as amended). **Zero runtime
   secrets** — everything is IAM-role auth.
 - **Key data-model idea:** everything keyed by user + budget cycle (`M#2026-07` /
   `B#2026-07-10`); cycle windows derived from settings, so cadence changes never rewrite
@@ -101,8 +101,9 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   `get_rule` (AP 13), `get_transaction`, `apply_categorization` (AP 10, correction-preserving
   update + GSI1/GSI2 maintenance). `s3.py`: presigned PUT URL + `<sub>/<importId>` key
   round-trip. `bedrock.py`: `BedrockCategorizer` via **boto3 `invoke_model`** (not the
-  `anthropic` SDK — zero runtime deps), inference-profile `us.anthropic.claude-opus-4-8`
-  (Opus 4.8 is INFERENCE_PROFILE-only), forced-tool structured output. `sqs.py`: best-effort
+  `anthropic` SDK — zero runtime deps), inference-profile `us.anthropic.claude-sonnet-4-6`
+  (INFERENCE_PROFILE-only; Opus 4.8 was the original choice but this account cannot invoke it —
+  ADR-008 amendment 2026-08-03), forced-tool structured output. `sqs.py`: best-effort
   categorization enqueue (a failed enqueue never fails a persisted import, FR-3.5).
 - **`backend/functions/`** — thin handlers, identity from verified JWT claims only (FR-1.3):
   `api_settings` (`GET`/`PATCH /settings`, live cycle), `api_categories` (`GET`/`POST
@@ -111,7 +112,7 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   **S3-triggered `importer`** (parse → file/row idempotent puts → import summary → enqueue added
   rows; no-op on redelivered terminal imports), and the **SQS-triggered `categorizer`**
   (rule-first → batched Bedrock → correction-preserving updates; partial-batch-failure → DLQ).
-  `backend/eval/` (not a Lambda): the label/score accuracy harness A/Bing Opus 4.8 vs Sonnet 5.
+  `backend/eval/` (not a Lambda): the label/score accuracy harness A/Bing Sonnet 4.6 vs Haiku 4.5.
 - **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
   constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
   Hosted-UI/PKCE client + owner user), `Ingest` (private SSE-S3 upload bucket: TLS-only,
@@ -196,13 +197,17 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 5 — AI categorization pipeline + eval harness: 🔨 deployed to dev + prod (2026-07-21, PR
-#25) but ⛔ NOT WORKING. Live-tested 2026-08-02: every categorizer invocation since deploy fails
-with `AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account` —
-account-level Bedrock model access was never granted (confirmed outside the Lambda with admin
-credentials; both Opus 4.8 and Sonnet 5 denied). BLOCKED ON OWNER: accept the model agreement
-(`bedrock create-foundation-model-agreement`, or the console's Model access page) — it is
-acceptance of commercial terms, so not automatable.**
+**Slice 5 — AI categorization pipeline + eval harness: 🔨 deployed 2026-07-21 (PR #25), broken on
+arrival, model swapped 2026-08-03. Every categorizer invocation failed with
+`AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account`. Root cause
+is **account-tier eligibility, not a missing model agreement** — the owner accepted the Opus 4.8
+agreement (CloudTrail-confirmed, `agreementAvailability` → AVAILABLE) and invocation was *still*
+denied 40+ min later, in all 3 profile regions, via both InvokeModel and Converse; accepting
+Sonnet 5's agreement as a control behaved identically. Measured boundary on this account —
+**invocable:** Haiku 4.5 · Sonnet 4.5 · Sonnet 4.6 · **denied:** Opus 4.7 · Opus 4.8 · Sonnet 5.
+**Categorizer now runs Claude Sonnet 4.6** (ADR-008 amendment) — interim, revisit → Sonnet 5 when
+the owner's frontier-tier request lands. Cost was not the driver: the whole 153-txn backlog is
+~$0.09 on Sonnet 4.6 vs ~$0.03 on Haiku 4.5, both noise against the $10 ceiling.**
 
 **What live-testing proved works:** presign → S3 → importer → 8/8 rows persisted + enqueued; and
 the failure path exactly as designed — 3 receives 360s apart → DLQ with all keys intact, and every
@@ -227,9 +232,9 @@ criteria is not done until someone runs them against the deployed stack.**
   categorization methods (`list_category_choices`, `get_rule`, `apply_categorization` —
   correction-preserving + GSI1/GSI2 maintenance), `functions/categorizer` (SQS-triggered,
   rule-first → batched Bedrock, partial-batch-failure → DLQ), `CategorizationConstruct`
-  (SQS+DLQ+alarm+Bedrock IAM), and `backend/eval/` (label/score harness A/Bing Opus 4.8 vs
-  Sonnet 5). Confidence threshold **0.8** (owner-approved). **Bedrock note:** Opus 4.8 is
-  INFERENCE_PROFILE-only → model id `us.anthropic.claude-opus-4-8`; IAM grant covers profile +
+  (SQS+DLQ+alarm+Bedrock IAM), and `backend/eval/` (label/score harness, now A/Bing Sonnet 4.6
+  vs Haiku 4.5). Confidence threshold **0.8** (owner-approved). **Bedrock note:** the models are
+  INFERENCE_PROFILE-only → model id `us.anthropic.claude-sonnet-4-6`; IAM grant covers profile +
   foundation-model ARNs (ADR-008 impl notes). No new ADR (design covered by ADR-008/009 +
   architecture §3.2). No diagram re-render — the async pipeline was already depicted.
 - Prior: Slice 4 — presigned CSV upload → S3 → import Lambda → transactions,

@@ -2,7 +2,7 @@
 
 The categorization pipeline (architecture §3.2, §4.5): the import Lambda enqueues newly-added
 transactions on an **SQS queue**; a **categorizer Lambda** consumes batches, applies merchant
-rules then Claude Opus 4.8 on Amazon Bedrock, and writes each result back to the one table.
+rules then Claude on Amazon Bedrock (model id is config), and writes each result back to the one table.
 Decoupling via SQS keeps categorization off the import path (FR-3.5) and gives retries + a
 **dead-letter queue** for free.
 
@@ -115,7 +115,7 @@ class CategorizationConstruct(Construct):
         self.categorizer_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["bedrock:InvokeModel"],
-                # Opus 4.8 is INFERENCE_PROFILE-only, so invoking needs permission on BOTH the
+                # The model is INFERENCE_PROFILE-only, so invoking needs permission on BOTH the
                 # inference-profile (in this region) AND the underlying foundation model in every
                 # region the cross-region profile may route to (region wildcarded). Bounded to
                 # the one model — no `*` model access (NFR-4.4).

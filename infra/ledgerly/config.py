@@ -20,17 +20,26 @@ BUDGET_FORECAST_USD = 8
 # Owner contact for budget alerts. Sourced from the session context; change here if it moves.
 OWNER_EMAIL = "oche.ocheobe@gmail.com"
 
-# AI categorization (Slice 5, ADR-008). Config flows to the categorizer Lambda as env vars,
-# and the model ids also scope the Bedrock IAM grant — kept here so runtime config and the
-# least-privilege policy share one source. Switching the model (e.g. the eval's Sonnet 5 A/B)
-# is a change here + a redeploy, not a rewrite (the Categorizer interface is provider-agnostic).
+# AI categorization (Slice 5, ADR-008 as amended 2026-08-03). Config flows to the categorizer
+# Lambda as env vars, and the model ids also scope the Bedrock IAM grant — kept here so runtime
+# config and the least-privilege policy share one source. Switching the model is a change here
+# + a redeploy, not a rewrite (the Categorizer interface is provider-agnostic) — a claim now
+# actually exercised, since the original choice had to be swapped out.
 #
-# Opus 4.8 (and Sonnet 5) are **INFERENCE_PROFILE-only** on Bedrock — verified 2026-07-21 via
-# `bedrock list-foundation-models` — so `invoke_model` must target the inference-profile id
-# (`us.anthropic.…`), not the bare foundation-model id. The grant needs BOTH the profile ARN
-# and the underlying foundation-model ARN (cross-region inference fans out to sibling regions).
-BEDROCK_MODEL_ID = "us.anthropic.claude-opus-4-8"          # what invoke_model targets
-BEDROCK_FOUNDATION_MODEL = "anthropic.claude-opus-4-8"     # underlying FM, for the IAM grant
+# These are **INFERENCE_PROFILE-only** on Bedrock, so `invoke_model` must target the
+# inference-profile id (`us.anthropic.…`), not the bare foundation-model id. The grant needs
+# BOTH the profile ARN and the underlying foundation-model ARN (cross-region inference fans
+# out to sibling regions: us-east-1, us-east-2, us-west-2).
+#
+# ⚠ Model choice is INTERIM. ADR-008 chose Opus 4.8; this account cannot invoke it. Live-tested
+# 2026-08-03 — accepting the Bedrock model agreement does NOT unlock it, so this is account-tier
+# eligibility, not a missing agreement. The boundary measured on account 816020558700:
+#     invocable:  Haiku 4.5 · Sonnet 4.5 · Sonnet 4.6
+#     denied:     Opus 4.7 · Opus 4.8 · Sonnet 5   (AccessDeniedException, agreements accepted)
+# Sonnet 4.6 is the strongest model available. Revisit → Sonnet 5 when the owner's eligibility
+# request lands; that is a two-line change here plus a redeploy.
+BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-6"        # what invoke_model targets
+BEDROCK_FOUNDATION_MODEL = "anthropic.claude-sonnet-4-6"   # underlying FM, for the IAM grant
 CONFIDENCE_THRESHOLD = "0.8"
 
 

@@ -6,9 +6,14 @@ so run it with the Ledgerly profile:
 
     AWS_PROFILE=ledgerly-dev AWS_REGION=us-east-1 python -m eval.run score \\
         --set eval/samples/labeled_set.example.json \\
-        --models us.anthropic.claude-opus-4-8 us.anthropic.claude-sonnet-5
+        --models us.anthropic.claude-sonnet-4-6 us.anthropic.claude-haiku-4-5-20251001-v1:0
 
-Model ids are Bedrock *inference-profile* ids (Opus 4.8 / Sonnet 5 are INFERENCE_PROFILE-only).
+Model ids are Bedrock *inference-profile* ids (these models are INFERENCE_PROFILE-only).
+
+The A/B pair changed on 2026-08-03. It was Opus 4.8 vs Sonnet 5; this account can invoke
+neither (account-tier eligibility — see ADR-008's amendment), so the comparison that actually
+matters here is **Sonnet 4.6 vs Haiku 4.5**: is the ~3x cheaper model good enough for a
+15-category classification? Both are invocable, so this A/B can actually be run.
 
 Two subcommands implement the agreed "you draft, I confirm" labeling flow (plan, Slice 5):
 
@@ -30,7 +35,8 @@ from pathlib import Path
 from core.categorize import DEFAULT_CONFIDENCE_THRESHOLD
 from eval.harness import evaluate, predict
 
-_BASELINE_MODEL = "us.anthropic.claude-opus-4-8"
+_BASELINE_MODEL = "us.anthropic.claude-sonnet-4-6"
+_CHEAP_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def _load(path: str) -> dict:
@@ -100,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     p_score = sub.add_parser("score", help="score model(s) against a labeled set")
     p_score.add_argument("--set", required=True, help="path to the labeled JSON set")
     p_score.add_argument("--models", nargs="+",
-                        default=[_BASELINE_MODEL, "us.anthropic.claude-sonnet-5"],
-                        help="Bedrock inference-profile ids to A/B (default: Opus 4.8 + Sonnet 5)")
+                        default=[_BASELINE_MODEL, _CHEAP_MODEL],
+                        help="Bedrock inference-profile ids to A/B (default: Sonnet 4.6 + Haiku 4.5)")
     p_score.set_defaults(func=cmd_score)
 
     p_label = sub.add_parser("label", help="draft labels for the owner to confirm")
