@@ -21,6 +21,10 @@ on:
       # backend/, infra/ and frontend/.
       - ".gitignore"
       - ".claude/**"
+      # Added 2026-08-03 for the same reason: `.mcp.json` declares which MCP servers the
+      # agent may talk to (AWS, Playwright). It is local agent tooling — nothing in it is
+      # deployed, and nothing reads it at build or run time.
+      - ".mcp.json"
 
 permissions:
   contents: read
