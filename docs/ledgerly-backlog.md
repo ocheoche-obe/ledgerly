@@ -48,6 +48,8 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
 | B-5 | Dependabot's two **pip** groups don't actually group — one PR per package | 2026-08 wave | process / noise | 🆕 | verify at the next monthly run |
 | B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | 🆕 | next infra-touching slice |
+| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | 🆕 | **Slice 6 blocker** (dashboard would read all-Uncategorized) |
+| B-8 | Eval baseline deferred by owner until the app is more fully built | Slice 5 live test | process / quality | 🔎 | revisit after Slice 7 |
 
 ---
 
@@ -193,6 +195,69 @@ adopt a proper lockfile (`pip-compile`/`uv`) for infra. The lockfile is the bett
 since infra is deploy-critical; the bound is the five-minute version.
 
 **Refs:** `infra/requirements.txt`; #35; ADR-004; relates to [B-5].
+
+---
+
+### B-7 — Nothing can categorize the transactions imported before Slice 5 🆕
+
+**Noticed:** 2026-08-02, driving the Slice 5 live exit criteria. **Type:** correctness / UX.
+**Likely home:** Slice 6 — treat as a **blocker**, not a nice-to-have.
+
+The importer enqueues only the rows it **newly added** (`enqueue_categorization(sub, added_keys)`).
+That is correct for its job, but it means categorization can only ever happen *at import time*.
+There is no path to categorize a transaction that already exists.
+
+Dev currently holds **153 real transactions** from the owner's Slice-4 Chase imports, every one
+at `categoryStatus: "uncategorized"`. They were imported before the categorizer existed, so they
+were never enqueued — and re-uploading the same file cannot fix it, because file-hash and row
+natural-key idempotency (ADR-012) mean a re-import adds **0 rows** and therefore enqueues **0**.
+The data is stranded by design.
+
+**Why this is a Slice 6 blocker specifically:** Slice 6 is the budget-vs-actual dashboard. Against
+today's data it would render every category at $0 spent and 153 transactions under "Uncategorized"
+— the product's core screen, demoing as empty, on real data. Fixing it after Slice 6 means the
+dashboard is untrustworthy for its whole first outing.
+
+**Options** (pick during Slice 6 planning):
+- A one-shot **re-drive** — scan for `categoryStatus = uncategorized` in a window and enqueue them
+  in batches. Smallest change; the categorizer is already idempotent and correction-preserving, so
+  a re-drive is safe to run more than once.
+- A **`POST /transactions/recategorize`** endpoint over a date window, which doubles as the manual
+  re-run control the review queue (Slice 7) will want anyway.
+
+The importer docstring already anticipates this — "a lost enqueue costs a re-drive at worst" — but
+no re-drive mechanism was ever built.
+
+**Refs:** `backend/functions/importer/handler.py` (~line 120); `backend/adapters/sqs.py`;
+relates to [B-4] and to FR-3.5.
+
+---
+
+### B-8 — Eval baseline deferred until the app is further along 🔎
+
+**Noticed:** 2026-08-02 (owner decision). **Type:** process / quality. **Likely home:** revisit
+after Slice 7.
+
+Slice 5 shipped `backend/eval/` (label/score harness, A/B across Opus 4.8 and Sonnet 5) and its
+exit criteria included a baseline accuracy number per model. **Owner has deferred this**: the app
+still lacks the dashboard (Slice 6) and the review queue (Slice 7), and the judgement is that
+measuring categorization quality is more useful once there is a product to judge it against.
+
+Recorded rather than dropped, because it is a real gap and the reason it is cheap to defer *now*
+is exactly the reason it gets expensive later:
+
+- The harness is **built and unit-tested**, so resuming is a matter of supplying labels, not code.
+- Slice 7's review queue is the natural place labels come from — every correction the owner makes
+  is a ground-truth label. Waiting until corrections exist means the eval set builds itself instead
+  of being hand-authored.
+- The countervailing risk: **the confidence threshold (0.8) is currently an unvalidated guess.**
+  Until a baseline exists there is no evidence for where auto-assign should stop and review should
+  start, so the review queue may be sized wrong in either direction. Note this when tuning it.
+
+Also unblocked-by-then: as of 2026-08-02 the account cannot invoke either model at all (see the
+Slice 5 completion notes on Bedrock model access), so an eval could not have run today regardless.
+
+**Refs:** `backend/eval/`; ADR-008; Slice 5 exit criteria in `ledgerly-plan.md`; [B-7].
 
 ---
 

@@ -78,8 +78,8 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
-| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 code-complete | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25) |
-| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ | — |
+| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 deployed dev+prod 2026-07-21, **blocked**: Bedrock model access not granted (live-tested 2026-08-02) | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25) |
+| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ ⚠ blocked by [B-7] (no backfill → dashboard reads all-Uncategorized) | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
 
@@ -360,14 +360,55 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 - **⚠ Open decisions:** confidence threshold default (proposal: 0.8, tuned against the
   eval set during the slice); prompt shape iterations recorded in the eval harness, not
   ad-hoc.
-- **Exit criteria:** ☐ a real import ends fully categorized within ~2 min (NFR-2.2) ☐
-  DLQ path verified (forced failure lands Uncategorized + alarm) ☐ eval harness reports
-  a baseline accuracy number **per model (Opus 4.8 + Sonnet 5)** ☐ docs current (+ ADL note
-  if threshold ≠ 0.8; + superseding note to ADR-008 if the eval justifies a model switch).
-- **Completion notes:** _🔨 **code-complete** (2026-07-21) — deploy + live verification pending
-  via the pipeline on merge (Option A, as prior slices), so the three ☐ live criteria stay open
-  until then. Local gates green: **164 backend tests** (was 124) + **13 frontend**; ruff clean;
-  `cdk synth` green dev + prod._
+- **Exit criteria:** ☐ a real import ends fully categorized within ~2 min (NFR-2.2) —
+  **blocked, see below** ☑ DLQ path verified end-to-end (2026-08-02 — unforced, a *real* failure:
+  DLQ received the message, `ledgerly-dev-categorize-dlq` alarm went to ALARM on the 19:39
+  datapoint, and all 8 transactions stayed Uncategorized)
+  ⊘ eval harness reports a baseline accuracy number **per model (Opus 4.8 + Sonnet 5)** —
+  **deferred by owner**, see [B-8] ☑ docs current (threshold stays 0.8, so no ADL note; no
+  model switch, so no ADR-008 superseding note).
+- **Completion notes:** _🔨 **deployed but not working.** Code merged (#25) and deployed to dev
+  **and prod** by the pipeline on 2026-07-21 — the earlier "not yet deployed" note was wrong; the
+  deploy run succeeded end to end and nobody checked. Live-tested 2026-08-02, which is when the
+  real state surfaced. Local gates green: **164 backend tests** (was 124) + **13 frontend**;
+  ruff clean; `cdk synth` green dev + prod._
+
+  - **⛔ The pipeline has never successfully categorized anything.** Every categorizer invocation
+    since deploy fails with
+    `AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account`.
+    This is **account-level Bedrock model access**, not IAM and not a code defect — confirmed by
+    invoking the model directly with admin credentials outside the Lambda and getting the same
+    denial, for **both** Opus 4.8 and Sonnet 5. `get-foundation-model-availability` reports
+    `agreementAvailability: NOT_AVAILABLE`: no model-access agreement was ever accepted on the
+    account. **Owner action** (accepting commercial terms, so not automatable):
+    `bedrock create-foundation-model-agreement --model-id anthropic.claude-opus-4-8 --offer-token …`,
+    or the Bedrock console's *Model access* page. Because the grant is **account-level**, one
+    acceptance fixes dev *and* prod at once. Prod carries the identical broken config but its table
+    is empty (0 items), so nothing has exercised it and there is no stranded data there.
+  - **Process lesson — this is the real finding.** The slice was marked code-complete with three
+    ☐ live criteria and the note "deploy + live smoke land via the pipeline on merge (Option A)."
+    The pipeline deploys code; it does not *exercise* it. A green deploy was silently treated as
+    evidence the feature worked, and the gap went unnoticed for 12 days. **Option A is fine for
+    shipping and insufficient for verifying** — a slice with live exit criteria is not done until
+    someone runs them against the deployed stack.
+  - **☑ What live-testing did prove.** Everything up to the Bedrock call is sound. A synthetic
+    8-row Chase CSV driven through presign → S3 → importer persisted 8/8 rows with correct natural
+    keys and enqueued them. The failure path then behaved exactly as designed: 3 receives at
+    precisely 360s apart (`VisibilityTimeout` 360 × `maxReceiveCount` 3), then the message moved
+    to `ledgerly-dev-categorize-dlq` with all 8 keys intact, the **DLQ-depth alarm fired**
+    (OK → ALARM on the 19:39 datapoint, threshold 1), and **all 8 transactions stayed
+    `categoryStatus: uncategorized` with a NULL `categoryId`**. That is FR-3.5's core promise
+    proven on real infrastructure: a total model outage leaves transactions *un-filed*, never
+    *mis-filed*. Note the DLQ takes ~18 min to fill, which is the correct trade-off but worth
+    knowing before watching a queue and concluding nothing is happening.
+  - **⚠ Stranded data → [B-7], a Slice 6 blocker.** Dev holds 153 real transactions from the
+    Slice-4 imports, all uncategorized. The importer only enqueues rows it *newly added*, and
+    ADR-012 idempotency means re-uploading adds 0 rows and enqueues 0 — so no re-import can ever
+    fix them. Slice 6's dashboard would render every category at $0 against real data. Needs a
+    re-drive path before the dashboard is worth looking at.
+  - **Test-data note:** the 8 synthetic rows live under `accountId = slice5-smoke-checking`, kept
+    deliberately separable from real data. Once model access is granted, redriving the DLQ message
+    categorizes exactly those 8 and closes the first exit criterion.
   - **Pure core (`core/categorize/`)** — the `Categorizer` interface (swappable model seam,
     ADR-008) + the §3.2 decision matrix (`decide_rule_hit`/`decide_llm`: threshold → auto vs
     kept-guess-with-review; null/invalid id → uncategorized+review, nothing mis-filed, FR-3.5)
