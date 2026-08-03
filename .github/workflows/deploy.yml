@@ -7,21 +7,34 @@ name: Deploy
 on:
   push:
     branches: [main]
-    # Pure-docs pushes don't change deployable artifacts — skip the deploy (and the dangling
-    # prod-pending approval it would otherwise create). A mixed code+docs push still deploys.
+    # Pure-docs / housekeeping pushes don't change deployable artifacts — skip the deploy (and
+    # the dangling prod-pending approval it would otherwise create). A mixed code+docs push
+    # still deploys. `.github/**` is deliberately NOT ignored: a change to the checks workflow
+    # or the cdk-deploy action should be exercised by a real run.
     paths-ignore:
       - "docs/**"
       - "**/*.md"
       - "LICENSE"
+      # Added 2026-08-02: PR #39 was docs + .gitignore and still queued a deploy, because
+      # .gitignore matched none of the patterns above. Nothing under these paths is deployed —
+      # `.claude/` is agent tooling (skills, hooks, settings); the deployable roots are
+      # backend/, infra/ and frontend/.
+      - ".gitignore"
+      - ".claude/**"
 
 permissions:
   contents: read
   id-token: write # required for OIDC federation into the deploy role
 
-# Never cancel an in-flight deploy; serialize pushes to main instead.
-concurrency:
-  group: deploy-main
-  cancel-in-progress: false
+# Concurrency is scoped **per stage**, not per workflow. A single workflow-level `deploy-main`
+# group meant an unapproved prod deploy held the group and blocked every later run — including
+# its *dev* deploy, which needs no approval. Seen live 2026-08-02: one pending prod approval
+# stalled the pipeline for three merges; runs #7–#9 were displaced while waiting (GitHub keeps
+# only one pending run per group) and never deployed dev at all, so dev silently sat three
+# commits behind main. dev must never wait on a prod decision.
+#
+# Both groups keep `cancel-in-progress: false` — never cancel an in-flight deploy. Prod deploys
+# still serialize against each other, which is the property actually worth having.
 
 jobs:
   checks:
@@ -30,6 +43,9 @@ jobs:
   deploy-dev:
     needs: checks
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -42,6 +58,9 @@ jobs:
   deploy-prod:
     needs: deploy-dev
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     # The `prod` environment carries a required-reviewer protection rule → manual approval
     # gate. Setting it here also makes the OIDC subject `...:environment:prod`, which is the
     # only subject (besides main) the deploy role trusts (ADR-011).
