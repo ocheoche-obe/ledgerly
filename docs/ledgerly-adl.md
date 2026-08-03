@@ -1,7 +1,7 @@
 # Ledgerly — Architectural Decisions Log (ADL)
 
 **Status:** Living document — updated as decisions are made
-**Last updated:** 2026-07-19
+**Last updated:** 2026-08-03
 
 ---
 
@@ -52,7 +52,7 @@ Superseded.
 | ADR-005 | Database: DynamoDB single-table, on-demand       | Accepted |
 | ADR-006 | Tenancy model: single-user, USER#\<sub\> partition scoping | Accepted |
 | ADR-007 | Authentication: Amazon Cognito User Pool         | Accepted |
-| ADR-008 | AI categorization: Amazon Bedrock + Claude Opus 4.8, swappable interface | Accepted |
+| ADR-008 | AI categorization: Amazon Bedrock + Claude behind a swappable interface | Accepted (amended 2026-08-03: model Opus 4.8 → **Sonnet 4.6**, account cannot invoke Opus 4.8) |
 | ADR-009 | Async backbone: SQS queue + DLQ for categorization | Accepted |
 | ADR-010 | AWS account topology: dedicated account per project | Accepted |
 | ADR-011 | CI/CD deploy federation: GitHub OIDC assuming CDK bootstrap roles | Accepted |
@@ -309,7 +309,7 @@ identity for all data scoping (ADR-006).
 
 ---
 
-## ADR-008: AI categorization — Amazon Bedrock + Claude Opus 4.8, behind a swappable interface
+## ADR-008: AI categorization — Amazon Bedrock + Claude, behind a swappable interface
 
 **Status:** Accepted (2026-07-13, architecture stage; owner-approved)
 
@@ -375,6 +375,58 @@ Categorization calls **Claude Opus 4.8 via Amazon Bedrock** (model ID
   (ACTIVE in the account), and the least-privilege IAM grant covers **both** the profile ARN
   *and* the underlying foundation-model ARN across regions (a cross-region profile fans out).
   Same shape for the eval's Sonnet 5 A/B (`us.anthropic.claude-sonnet-5`).
+
+### Amendment (2026-08-03): model changed to Sonnet 4.6 — Opus 4.8 is not invocable here
+
+**Status: Accepted, amended.** The decision (Bedrock + Claude behind a swappable interface)
+stands unchanged. The *model* does not: **this AWS account cannot invoke Opus 4.8**, so the
+categorizer now runs **Claude Sonnet 4.6** (`us.anthropic.claude-sonnet-4-6`).
+
+**What happened.** Slice 5 was deployed 2026-07-21 and every categorizer invocation failed with
+`AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account`. Nobody
+noticed for 12 days because the slice's live exit criteria were never run (see the Slice 5
+completion notes; the process lesson is now a binding convention in `CLAUDE.md`).
+
+**It was not a missing model agreement.** That was the first hypothesis and it was wrong. The
+owner accepted the Bedrock model agreement for Opus 4.8 on 2026-08-03 — CloudTrail confirms
+`CreateFoundationModelAgreement` succeeded, and `agreementAvailability` flipped
+`NOT_AVAILABLE → AVAILABLE`. **Invocation was still denied**, 40+ minutes later, in all three
+regions the `us.` profile fans out to, via both `InvokeModel` and `Converse`. Accepting the
+Sonnet 5 agreement as a control produced the same result. All four availability fields
+(`agreementAvailability`, `entitlementAvailability`, `authorizationStatus`,
+`regionAvailability`) read `AVAILABLE`/`AUTHORIZED` for a model that cannot be called.
+
+**The measured boundary** on account `816020558700`, us-east-1:
+
+| Invocable | Denied (`AccessDeniedException`) |
+|---|---|
+| Haiku 4.5 · Sonnet 4.5 · **Sonnet 4.6** | Opus 4.7 · **Opus 4.8** · Sonnet 5 |
+
+The cut is by model tier, not vendor: Claude 3 Haiku returns a *different* error (legacy-model
+policy), so the account reaches model-specific checks rather than being blocked from Anthropic
+wholesale. This is **account-tier eligibility**, and the error text says so — *"contact AWS
+Sales for additional access options"*. The owner is raising a request for frontier-tier access
+separately; it is not a blocker for Ledgerly.
+
+**Why Sonnet 4.6.** It is the strongest model the account can actually invoke. Cost did not
+drive the choice and should not have: at Ledgerly's volume the whole 153-transaction backlog is
+roughly **$0.09** on Sonnet 4.6 versus **$0.03** on Haiku 4.5, and steady state is ~$0.12/month
+versus ~$0.04/month. Both are rounding errors against the $10/month ceiling (NFR-1.1), so the
+sensible move is to buy quality with pennies rather than optimise the pennies.
+
+**Interim, explicitly.** Revisit → Sonnet 5 when the eligibility request lands. That is a
+two-line change in `infra/ledgerly/config.py` plus a redeploy.
+
+**What this vindicates.** The original ADR claimed "model choice is revisit-cheap: a swap is
+config + ADR." That claim is now *tested* rather than asserted — the swap touched
+`BEDROCK_MODEL_ID` / `BEDROCK_FOUNDATION_MODEL` in one config module (which feeds both the
+runtime env var and the IAM grant), plus docstrings and test fixtures. No logic changed. The
+`Categorizer` interface and the pure `core/categorize/` decision matrix were untouched.
+
+**Knock-on:** the eval harness A/B pair changes from *Opus 4.8 vs Sonnet 5* (neither invocable,
+so the comparison was unrunnable) to **Sonnet 4.6 vs Haiku 4.5** — which is a better question
+anyway: *is the ~3× cheaper model good enough for a 15-category classification?* Both can
+actually be called. The eval itself remains deferred by owner decision ([B-8]).
 
 ---
 

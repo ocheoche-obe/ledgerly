@@ -1,7 +1,7 @@
 """Categorization domain (FR-3) — pure Python, no AWS imports.
 
 This package owns the *interface* and the *decision logic* of AI categorization; the concrete
-model call (Bedrock / Claude Opus 4.8) lives in ``adapters/bedrock.py`` behind the
+model call (Bedrock / Claude) lives in ``adapters/bedrock.py`` behind the
 ``Categorizer`` protocol, so swapping model or provider is a config + adapter change, not a
 rewrite (ADR-008, NFR-6.1). The split mirrors the portability seam (architecture §5.2):
 ``core/`` decides *what* a categorization means; ``adapters/`` performs the SDK call.

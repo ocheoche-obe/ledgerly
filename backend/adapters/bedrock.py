@@ -1,7 +1,7 @@
 """Bedrock adapter — the concrete ``Categorizer`` (ADR-008).
 
 This is the AWS-facing side of the categorization seam: it wraps the pure prompt/parse contract
-(``core.categorize.prompt``) in an Amazon Bedrock ``invoke_model`` call to Claude Opus 4.8, and
+(``core.categorize.prompt``) in an Amazon Bedrock ``invoke_model`` call to Claude, and
 returns the raw per-transaction results that ``core.categorize.decide_llm`` turns into stored
 decisions. Keeping it here (not in ``core/``) preserves the portability seam — ``core/`` has no
 AWS imports — and makes the model a swappable config choice (NFR-6.1).
@@ -14,9 +14,11 @@ a **forced tool call**, and thinking is disabled (a fast classification task, an
 Bedrock requires alongside a forced ``tool_choice``).
 
 Config is env-driven so the eval harness and a future model swap need no code change:
-- ``BEDROCK_MODEL_ID``  — default ``us.anthropic.claude-opus-4-8`` (the Slice-5 baseline). Opus
-  4.8 is INFERENCE_PROFILE-only on Bedrock, so this is the *inference-profile* id, not the bare
-  foundation-model id. The eval harness points it at ``us.anthropic.claude-sonnet-5`` to A/B.
+- ``BEDROCK_MODEL_ID``  — default ``us.anthropic.claude-sonnet-4-6``. These models are
+  INFERENCE_PROFILE-only on Bedrock, so this is the *inference-profile* id, not the bare
+  foundation-model id. ADR-008 originally specified Opus 4.8; this account cannot invoke it
+  (account-tier eligibility, not a missing agreement — see ADR-008's 2026-08-03 amendment), so
+  Sonnet 4.6 is the interim choice. The eval harness A/Bs it against ``us.anthropic.claude-haiku-4-5-20251001-v1:0``.
 - ``BEDROCK_MAX_TOKENS`` — output cap for the tool call (default 8192; scales with batch size).
 """
 from __future__ import annotations
@@ -29,7 +31,7 @@ from botocore.config import Config
 
 from core.categorize.prompt import TOOL_NAME, build_request, parse_tool_use
 
-_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-opus-4-8")
+_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 _MAX_TOKENS = int(os.environ.get("BEDROCK_MAX_TOKENS", "8192"))
 _ANTHROPIC_VERSION = "bedrock-2023-05-31"
 
@@ -42,7 +44,7 @@ _client = boto3.client(
 
 
 class BedrockCategorizer:
-    """A ``core.categorize.Categorizer`` backed by Claude Opus 4.8 on Amazon Bedrock."""
+    """A ``core.categorize.Categorizer`` backed by Claude on Amazon Bedrock (model is config)."""
 
     def __init__(self, model_id: str | None = None, *, max_tokens: int | None = None):
         # Args override env (the eval harness passes model_id explicitly to A/B models); env is

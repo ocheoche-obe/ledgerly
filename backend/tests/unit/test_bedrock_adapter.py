@@ -20,7 +20,7 @@ def bedrock(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
-    monkeypatch.setenv("BEDROCK_MODEL_ID", "anthropic.claude-opus-4-8")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-6")
     sys.modules.pop("adapters.bedrock", None)
     module = importlib.import_module("adapters.bedrock")
     return module
@@ -65,7 +65,7 @@ def test_request_body_forces_the_tool_and_targets_the_model(bedrock, monkeypatch
 
     results = bedrock.BedrockCategorizer().categorize(TXNS, categories=CATEGORIES, corrections=[])
 
-    assert captured["modelId"] == "anthropic.claude-opus-4-8"
+    assert captured["modelId"] == "anthropic.claude-sonnet-4-6"
     body = captured["body"]
     assert body["anthropic_version"] == "bedrock-2023-05-31"
     assert body["tool_choice"] == {"type": "tool", "name": "record_categorizations"}
@@ -77,9 +77,9 @@ def test_model_id_override_wins_over_env(bedrock, monkeypatch):
     # The eval harness passes model_id explicitly to A/B Opus vs Sonnet.
     captured: dict = {}
     _stub_invoke(monkeypatch, bedrock, {"content": []}, captured)
-    bedrock.BedrockCategorizer(model_id="anthropic.claude-sonnet-5").categorize(
+    bedrock.BedrockCategorizer(model_id="anthropic.claude-haiku-4-5").categorize(
         TXNS, categories=CATEGORIES, corrections=[])
-    assert captured["modelId"] == "anthropic.claude-sonnet-5"
+    assert captured["modelId"] == "anthropic.claude-haiku-4-5"
 
 
 def test_missing_tool_block_parses_to_empty(bedrock, monkeypatch):
