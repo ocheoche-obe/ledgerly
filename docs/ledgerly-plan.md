@@ -78,8 +78,8 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 2 | CI/CD **deploy** pipeline + prod promotion (test/lint/SAST CI already landed in Slice 1) | NFR-5.1/5.2/5.3 | ✅ deployed (2026-07-15) | [#19](https://github.com/ocheoche-obe/ledgerly/pull/19) |
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
-| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | 🔨 deployed dev+prod 2026-07-21, **blocked**: Bedrock model access not granted (live-tested 2026-08-02) | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25) |
-| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ ⚠ blocked by [B-7] (no backfill → dashboard reads all-Uncategorized) | — |
+| 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ✅ complete (2026-08-03) — deployed 2026-07-21, broken on arrival (Opus 4.8 not invocable on this account), model → Sonnet 4.6, verified live 8/8 in ~24s. Eval baseline deferred ([B-8]) | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25), [#41](https://github.com/ocheoche-obe/ledgerly/pull/41) |
+| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ — now **includes [B-7]** (recategorize endpoint) as a prerequisite, owner-approved 2026-08-03 | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
 
@@ -338,7 +338,7 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     the fix ADR-013 already anticipated). This observation also motivated creating
     `ledgerly-backlog.md` (build-time inbox in front of the parking lot).
 
-### Slice 5 — AI categorization pipeline + eval harness 🔨 ⚠
+### Slice 5 — AI categorization pipeline + eval harness ✅
 
 - **Goal:** imported transactions get categorized automatically with confidence, async,
   and accuracy is *measured*, not vibes (NFR-5.3).
@@ -360,13 +360,13 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 - **⚠ Open decisions:** confidence threshold default (proposal: 0.8, tuned against the
   eval set during the slice); prompt shape iterations recorded in the eval harness, not
   ad-hoc.
-- **Exit criteria:** ☐ a real import ends fully categorized within ~2 min (NFR-2.2) —
-  **blocked, see below** ☑ DLQ path verified end-to-end (2026-08-02 — unforced, a *real* failure:
-  DLQ received the message, `ledgerly-dev-categorize-dlq` alarm went to ALARM on the 19:39
-  datapoint, and all 8 transactions stayed Uncategorized)
-  ⊘ eval harness reports a baseline accuracy number **per model (Opus 4.8 + Sonnet 5)** —
-  **deferred by owner**, see [B-8] ☑ docs current (threshold stays 0.8, so no ADL note; no
-  model switch, so no ADR-008 superseding note).
+- **Exit criteria:** ☑ a real import ends fully categorized within ~2 min (NFR-2.2) — **met
+  2026-08-03: 8/8 in ~24s**, comfortably inside budget ☑ DLQ path verified end-to-end
+  (2026-08-02 — unforced, a *real* failure: DLQ received the message,
+  `ledgerly-dev-categorize-dlq` alarm went to ALARM on the 19:39 datapoint, and all 8
+  transactions stayed Uncategorized) ⊘ eval harness reports a baseline accuracy number per
+  model — **deferred by owner**, see [B-8] ☑ docs current (threshold stays 0.8; ADR-008
+  **amended** 2026-08-03 for the forced model change).
 - **Completion notes:** _🔨 **deployed but not working.** Code merged (#25) and deployed to dev
   **and prod** by the pipeline on 2026-07-21 — the earlier "not yet deployed" note was wrong; the
   deploy run succeeded end to end and nobody checked. Live-tested 2026-08-02, which is when the
@@ -407,8 +407,51 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     fix them. Slice 6's dashboard would render every category at $0 against real data. Needs a
     re-drive path before the dashboard is worth looking at.
   - **Test-data note:** the 8 synthetic rows live under `accountId = slice5-smoke-checking`, kept
-    deliberately separable from real data. Once model access is granted, redriving the DLQ message
-    categorizes exactly those 8 and closes the first exit criterion.
+    deliberately separable from real data. Left in dev on purpose — until [B-7] lands they are the
+    *only* categorized transactions in the table, which makes them useful for Slice 6 dashboard
+    work. Delete whenever they stop being useful (query `accountId = slice5-smoke-checking`).
+
+### Slice 5 — resolution (2026-08-03) ✅
+
+**Closed.** The blocker was resolved by changing model, not by gaining access to Opus 4.8.
+
+- **Root cause was account-tier eligibility, not a missing agreement** — see the ADR-008
+  amendment for the full evidence. The owner accepted the Opus 4.8 agreement and invocation was
+  still denied; Sonnet 5 behaved identically as a control. Invocable on this account:
+  Haiku 4.5 / Sonnet 4.5 / Sonnet 4.6. Denied: Opus 4.7 / Opus 4.8 / Sonnet 5.
+- **Categorizer switched to Claude Sonnet 4.6** (#41). Interim; revisit → Sonnet 5 if the owner's
+  frontier-tier request is granted. Cost was not the deciding factor — the whole backlog is ~$0.09
+  on Sonnet 4.6 vs ~$0.03 on Haiku 4.5, both noise against the $10/month ceiling (NFR-1.1).
+- **Exit criterion 1 met by redriving the DLQ.** `sqs start-message-move-task` returned the
+  original failed message to the queue; the categorizer picked it up and wrote **8/8 in ~24
+  seconds** — the same message that had failed 3× against Opus 4.8. That is a clean demonstration
+  of the DLQ's purpose: no data lost, no re-import needed, just fix the cause and redrive.
+- **Accuracy on the smoke set: 8/8 correct**, with confidence that looks genuinely calibrated
+  rather than uniformly high:
+
+  | Merchant | Category | Confidence |
+  |---|---|---|
+  | NETFLIX.COM | Subscriptions | 0.99 |
+  | PAYROLL DEPOSIT ACME CORP | Income | 0.99 |
+  | SEATTLE CITY LIGHT | Utilities | 0.99 |
+  | CHIPOTLE | Dining Out | 0.98 |
+  | SAFEWAY | Groceries | 0.97 |
+  | SHELL OIL | Transportation | 0.95 |
+  | AMAZON MKTPL | Shopping | 0.85 |
+  | WALGREENS | Health | 0.80 |
+
+  The model is *least* confident exactly where a human would be: Amazon (sells everything) and
+  Walgreens (Health vs Shopping). That is early evidence the 0.8 threshold is in a sensible
+  region — though 8 hand-made rows is a smoke test, not the eval baseline ([B-8] still stands).
+- **⚠ Boundary behaviour worth knowing:** Walgreens scored *exactly* 0.80 and was auto-filed with
+  `needsReview: false`, so the threshold comparison is **inclusive (`>=`)**. Anything landing
+  precisely on the line auto-files rather than going to review. Confirm that is the intent when
+  Slice 7 sizes the review queue.
+- **Prompt/tool contract survived the model change.** Validated against live Bedrock *before*
+  deploying (per the new "deployed ≠ working" convention): Sonnet 4.6 honours the forced-tool
+  schema, and on a deliberately unrecognizable vendor returned `categoryId: null, confidence: 0.0`
+  — declining rather than guessing, which is exactly the input `decide_llm` maps to
+  `uncategorized`.
   - **Pure core (`core/categorize/`)** — the `Categorizer` interface (swappable model seam,
     ADR-008) + the §3.2 decision matrix (`decide_rule_hit`/`decide_llm`: threshold → auto vs
     kept-guess-with-review; null/invalid id → uncategorized+review, nothing mis-filed, FR-3.5)
@@ -439,17 +482,38 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 
 - **Goal:** the product's reason to exist: budget vs. actual per category for any cycle,
   in one glance.
-- **Scope in:** budget amounts per category per cycle (`PUT /cycles/{id}/budgets/{cat}`,
-  FR-4.3) + editing UI; cycle summary endpoint (budgets + windowed transactions,
-  aggregated — architecture §3.3); dashboard screen: per-category budget vs. actual,
-  totals (in/out/remaining), drill-down to transactions (GSI1), past-cycle picker
+- **Scope in:** **[B-7] `POST /transactions/recategorize` first — do this before the dashboard**
+  (owner-approved 2026-08-03, see below); budget amounts per category per cycle
+  (`PUT /cycles/{id}/budgets/{cat}`, FR-4.3) + editing UI; cycle summary endpoint (budgets +
+  windowed transactions, aggregated — architecture §3.3); dashboard screen: per-category budget
+  vs. actual, totals (in/out/remaining), drill-down to transactions (GSI1), past-cycle picker
   (FR-5.3); responsive layout verified on a phone (FR-5.4); NFR-2.1 (<2s) and NFR-7.1
   (no-scroll desktop glance) checked against the deployed app.
+- **⛔ Prerequisite — [B-7], the recategorize endpoint.** Dev holds **153 real transactions**
+  that are permanently uncategorized: the importer enqueues only rows it *newly added*, and
+  ADR-012 idempotency means re-uploading the same export adds 0 rows and enqueues 0. Build a
+  `POST /transactions/recategorize` endpoint over a date window that re-enqueues matching
+  transactions, and run it once over the Slice-4 backlog.
+  - **Why the endpoint and not a one-off script** (owner-approved): Slice 7's review queue needs
+    exactly this capability anyway ("recategorize these"), so building it once serves both. A
+    throwaway script would be discarded and rebuilt.
+  - **It is nearly free to build.** `enqueue_categorization(sub, keys)` already exists, the
+    categorizer is idempotent and correction-preserving (AP 10), and `query_transactions` already
+    does the date-window read. The endpoint is a thin handler over parts that all exist.
+  - **Do it first.** Against today's data the dashboard renders every category at $0 with 153
+    rows under "Uncategorized" — the product's core screen demoing empty on real data. Building
+    the dashboard against uncategorized data also means never seeing whether the *layout* works
+    with realistic category distribution.
+  - Only the 8 synthetic `slice5-smoke-checking` rows are currently categorized; they exist
+    precisely so there is *some* real categorized data to develop against until this lands.
 - **Scope out:** trends across cycles (parking lot).
 - **⚠ Open decisions:** dashboard visual design — a proposed layout brought to owner
   early in the slice.
-- **Exit criteria:** ☐ owner answers "where is my money going, am I over anywhere?" from
-  one deployed screen ☐ works on phone browser ☐ past cycles viewable ☐ docs current.
+- **Exit criteria:** ☐ [B-7] the 153 backlog transactions are categorized via the new endpoint
+  ☐ owner answers "where is my money going, am I over anywhere?" from one deployed screen
+  ☐ works on phone browser ☐ past cycles viewable ☐ docs current.
+- **⚠ Verify live, not just deployed.** Per the convention added after Slice 5: a green deploy is
+  not evidence the feature works. Every ☐ above is checked against the deployed stack.
 - **Completion notes:** _—_
 
 ### Slice 7 — Review queue, corrections & transaction management ⬜

@@ -197,33 +197,36 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 5 — AI categorization pipeline + eval harness: 🔨 deployed 2026-07-21 (PR #25), broken on
-arrival, model swapped 2026-08-03. Every categorizer invocation failed with
-`AccessDeniedException: anthropic.claude-opus-4-8 is not available for this account`. Root cause
-is **account-tier eligibility, not a missing model agreement** — the owner accepted the Opus 4.8
-agreement (CloudTrail-confirmed, `agreementAvailability` → AVAILABLE) and invocation was *still*
-denied 40+ min later, in all 3 profile regions, via both InvokeModel and Converse; accepting
-Sonnet 5's agreement as a control behaved identically. Measured boundary on this account —
-**invocable:** Haiku 4.5 · Sonnet 4.5 · Sonnet 4.6 · **denied:** Opus 4.7 · Opus 4.8 · Sonnet 5.
-**Categorizer now runs Claude Sonnet 4.6** (ADR-008 amendment) — interim, revisit → Sonnet 5 when
-the owner's frontier-tier request lands. Cost was not the driver: the whole 153-txn backlog is
-~$0.09 on Sonnet 4.6 vs ~$0.03 on Haiku 4.5, both noise against the $10 ceiling.**
+**Slice 5 — AI categorization pipeline + eval harness: ✅ COMPLETE (2026-08-03). Next: Slice 6 —
+budgets & at-a-glance dashboard, starting with [B-7] (see below). Start it with `/start-slice`.**
 
-**What live-testing proved works:** presign → S3 → importer → 8/8 rows persisted + enqueued; and
-the failure path exactly as designed — 3 receives 360s apart → DLQ with all keys intact, and every
-transaction left `uncategorized`/NULL `categoryId`. FR-3.5's promise (a model outage leaves data
-*un-filed*, never *mis-filed*) is proven on real infrastructure.
+Slice 5 shipped 2026-07-21 (#25) and was **broken on arrival for 12 days**: every categorizer
+invocation failed with `AccessDeniedException` on Opus 4.8. Root cause was **account-tier
+eligibility, not a missing model agreement** — the owner accepted the agreement (CloudTrail-
+confirmed) and invocation was *still* denied, as was Sonnet 5 as a control. Invocable on this
+account: **Haiku 4.5 · Sonnet 4.5 · Sonnet 4.6**; denied: **Opus 4.7 · Opus 4.8 · Sonnet 5**.
+Categorizer switched to **Claude Sonnet 4.6** (#41, ADR-008 amendment) — interim; revisit →
+Sonnet 5 if the owner's frontier-tier request is granted. **Note for future Bedrock debugging:
+all four `get-foundation-model-availability` fields read AVAILABLE/AUTHORIZED for a model that
+cannot be called — only invocation is a reliable signal.**
 
-**Two things to carry forward:** (1) **[B-7] is a Slice 6 blocker** — 153 real transactions from
-Slice 4 can never be categorized (the importer enqueues only newly-added rows; ADR-012 idempotency
-means a re-import adds 0), so the dashboard would render every category at $0 on real data. Needs
-a re-drive path first. (2) **Eval baseline deferred by owner → [B-8]**; note the 0.8 confidence
-threshold is therefore still an unvalidated guess.
+**Verified live 2026-08-03:** redriving the DLQ (`sqs start-message-move-task`) returned the
+original failed message; the categorizer wrote **8/8 in ~24s** (NFR-2.2 budget is ~2 min) at
+**8/8 accuracy**, with calibrated confidence — 0.99 on unambiguous merchants, 0.85 Amazon, 0.80
+Walgreens. ⚠ Walgreens scored *exactly* 0.80 and auto-filed, so the threshold is **inclusive
+(`>=`)** — confirm that's intended when Slice 7 sizes the review queue. Earlier, the DLQ path was
+verified by an unforced real failure (3 retries 360s apart → DLQ → alarm, everything left
+Uncategorized): FR-3.5's "un-filed, never mis-filed" promise proven on real infrastructure.
 
-**Process lesson:** "deploy + live smoke land via the pipeline on merge (Option A)" conflated
-*deployed* with *working*. The pipeline deploys code, it does not exercise it; a green deploy was
-read as evidence the feature worked and the gap stood for 12 days. **A slice with live exit
-criteria is not done until someone runs them against the deployed stack.**
+**Carry into Slice 6:** **[B-7] is the first task, owner-approved** — build
+`POST /transactions/recategorize` (a date-window re-enqueue) and run it over the 153 real
+transactions stranded uncategorized since Slice 4 (the importer only enqueues newly-added rows;
+ADR-012 idempotency means a re-import adds 0). Do it *before* the dashboard, or the product's core
+screen demos at $0 across every category. Chosen as an endpoint rather than a one-off script
+because Slice 7's review queue needs the same capability. Eval baseline stays deferred (**[B-8]**);
+the 0.8 threshold remains unvalidated beyond the 8-row smoke set. The only categorized data in dev
+today is those 8 synthetic `slice5-smoke-checking` rows, kept deliberately so Slice 6 has
+something realistic to build against until B-7 lands.
 
 - Last completed (code): Slice 5 — `core/categorize/` (Categorizer interface + §3.2 decision
   matrix + prompt/forced-tool contract), `core/merchant_rules.py` (RULE# read seam),
