@@ -73,7 +73,59 @@ share the same SSO login. Pin these:
 (CareerVault, `768396678224`) shares this SSO login, so a bare profile can silently hit the
 wrong account. Guards enforcing this: a SessionStart hook (`.claude/check-aws-profile.sh`)
 asserts the account at session start; `/start-slice` re-asserts it and stops on mismatch;
-and `infra/app.py` pins the account so a wrong-account `cdk deploy` fails fast.
+and `infra/app.py` pins the account so a wrong-account `cdk deploy` fails fast. **Fourth guard
+(added 2026-08-03):** `.mcp.json` pins `AWS_PROFILE=ledgerly-dev` on the `aws-mcp` server, so
+Agent-Toolkit AWS calls cannot fall through the default credential chain either.
+
+## AWS agent tooling (Agent Toolkit for AWS)
+
+_Installed 2026-08-03. Upstream rules adapted — where they conflicted with ADR-010, ADR-010 wins._
+
+- **AWS MCP server (`aws-mcp`)** is available and preferred for ad-hoc AWS *reads* and
+  investigation (sandboxed execution + audit logging) — **but only with the Ledgerly profile.**
+  The project-scoped `.mcp.json` pins `AWS_PROFILE=ledgerly-dev`; the user-level entry in
+  `~/.claude.json` does **not**, and `~/.aws/config` still carries a stale `[profile
+  agent-toolkit]` pointing at CareerVault (`768396678224`). Never remove that pin. If the MCP
+  server is unavailable, fall back to the AWS CLI with the usual `AWS_PROFILE=ledgerly-dev` prefix.
+- **Check for a relevant AWS skill before starting AWS work** — 16 are installed in
+  `~/.claude/skills/` (`aws-cdk`, `aws-serverless`, `amazon-bedrock`,
+  `aws-billing-and-cost-management`, `aws-sdk-python-usage`, `aws-observability`, …; 92 more in
+  the remote catalog via `aws agent-toolkit list-available-skills --region us-east-1`). Prefer a
+  skill's guidance over general knowledge. `amazon-bedrock` is the relevant one for the
+  categorizer; note it will not know this account's tier limits — see the Bedrock notes below.
+- **Verify, don't guess**, on API parameters, IAM permissions, limits, and error codes; state
+  uncertainty explicitly rather than asserting. This project has already been burned by an
+  availability API that reported AVAILABLE/AUTHORIZED for a model that could not be invoked —
+  **only invocation is a reliable signal** (Slice 5).
+- **Infrastructure is CDK, always** (NFR-5.1). The MCP server can create resources directly;
+  it must not. Reads and diagnosis via MCP/CLI are fine — anything that changes infrastructure
+  goes through `infra/` and the pipeline.
+- **Secrets:** Ledgerly is zero-runtime-secrets by design (all IAM-role auth), so no
+  Secrets Manager reads should ever be needed. If that changes, it needs an ADR first — do not
+  fetch secret values into context.
+- Avoid em dashes in AWS resource names and descriptions; use hyphens.
+
+## Browser tooling (Playwright MCP)
+
+_Added 2026-08-03, ahead of Slice 6's dashboard._
+
+- **`playwright` MCP server** (project-scoped in `.mcp.json`, pinned to `@playwright/mcp@0.0.78`)
+  drives a real Chromium so UI work can be *seen* rather than inferred. Runs `--headless`; drop
+  that flag in `.mcp.json` if you want to watch a run. First use on a fresh clone needs
+  `npx playwright install chromium` (~95 MB, cached in `~/Library/Caches/ms-playwright/`).
+- **Local loop:** `cd frontend && npm run dev` → `http://localhost:5173`. Note the SPA fetches a
+  runtime `/config.json` (Cognito + API URLs) that only exists in the deployed bucket, so a bare
+  local dev server has no backend — either point it at the dev stack's config or expect the
+  panels to fail their first fetch.
+- **Use it for:** visual verification of layout/spacing/contrast changes, catching console and
+  network errors, and exercising real flows (login → import → dashboard) that unit tests can't.
+  **Not a replacement for** the vitest suite (`npm run test`) — it complements it; there is no
+  Playwright *test* suite in the repo and CI does not run a browser.
+- **Version pin is deliberate:** `@playwright/mcp` is a `0.0.x` package, so `@latest` carries no
+  semver protection. Bump it intentionally, not implicitly.
+- The browser profile persists between runs (not `--isolated`), so a Hosted-UI login survives —
+  convenient, but it means real Cognito tokens sit in the on-disk profile. That's outside the
+  repo and never logged, but don't point it at prod casually.
 
 ## Components / functions
 
@@ -164,6 +216,12 @@ _Solidified at the end of Slice 1. Binding:_
   `npm run build`/`test` (frontend). CI runs all on PR (`.github/workflows/ci.yml`).
 - **Security gate:** `/security-review` is a blocking pre-commit step every slice; CodeQL +
   Dependabot are the remote net on PRs.
+- **Explain the diff:** the `explain-diff` skill renders an interactive walkthrough of a PR to
+  `docs/explainers/YYYY-MM-DD-<slug>.html` (background → intuition → code → quiz). Runs at
+  `/wrap-slice` (step 7) as an **advisory** step, committed with the slice. Ledgerly is an
+  explicit learning vehicle and most code here is agent-generated; this is how the owner's
+  understanding keeps pace with what's deployed. Explainers are a *record of one change*, never
+  authoritative — canonical docs win.
 - **Code review:** `/code-review medium` runs at `/wrap-slice` (step 3) as an **advisory**
   (non-blocking) correctness pass — adopted Slice 3 after a trial found real bugs CI + tests
   + security-review missed. Triage findings; a false positive never blocks a slice.
