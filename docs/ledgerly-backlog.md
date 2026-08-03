@@ -48,7 +48,7 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
 | B-5 | Dependabot's two **pip** groups don't actually group — one PR per package | 2026-08 wave | process / noise | 🆕 | verify at the next monthly run |
 | B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | 🆕 | next infra-touching slice |
-| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | 🆕 | **Slice 6 blocker** (dashboard would read all-Uncategorized) |
+| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | 🔎 | **Slice 6, first task** — `POST /transactions/recategorize` (owner-approved 2026-08-03) |
 | B-8 | Eval baseline deferred by owner until the app is more fully built | Slice 5 live test | process / quality | 🔎 | revisit after Slice 7 |
 
 ---
@@ -201,7 +201,9 @@ since infra is deploy-critical; the bound is the five-minute version.
 ### B-7 — Nothing can categorize the transactions imported before Slice 5 🆕
 
 **Noticed:** 2026-08-02, driving the Slice 5 live exit criteria. **Type:** correctness / UX.
-**Likely home:** Slice 6 — treat as a **blocker**, not a nice-to-have.
+**Home: decided 2026-08-03 (owner-approved) — Slice 6, built first, as
+`POST /transactions/recategorize`.** Folded into the Slice 6 scope + exit criteria in
+`ledgerly-plan.md`; this entry stays as the trail.
 
 The importer enqueues only the rows it **newly added** (`enqueue_categorization(sub, added_keys)`).
 That is correct for its job, but it means categorization can only ever happen *at import time*.
@@ -218,12 +220,12 @@ today's data it would render every category at $0 spent and 153 transactions und
 — the product's core screen, demoing as empty, on real data. Fixing it after Slice 6 means the
 dashboard is untrustworthy for its whole first outing.
 
-**Options** (pick during Slice 6 planning):
-- A one-shot **re-drive** — scan for `categoryStatus = uncategorized` in a window and enqueue them
-  in batches. Smallest change; the categorizer is already idempotent and correction-preserving, so
-  a re-drive is safe to run more than once.
-- A **`POST /transactions/recategorize`** endpoint over a date window, which doubles as the manual
-  re-run control the review queue (Slice 7) will want anyway.
+**Resolution (2026-08-03, owner-approved): the endpoint, not a one-off script.** Slice 7's review
+queue needs the same "recategorize these" capability, so building it once serves both — a
+throwaway script would be discarded and rebuilt weeks later. It is also nearly free:
+`enqueue_categorization(sub, keys)` exists, `query_transactions` already does the date-window
+read, and the categorizer is idempotent and correction-preserving (AP 10), so a thin handler over
+existing parts is the whole job. Safe to run more than once by construction.
 
 The importer docstring already anticipates this — "a lost enqueue costs a re-drive at worst" — but
 no re-drive mechanism was ever built.
@@ -254,10 +256,25 @@ is exactly the reason it gets expensive later:
   Until a baseline exists there is no evidence for where auto-assign should stop and review should
   start, so the review queue may be sized wrong in either direction. Note this when tuning it.
 
-Also unblocked-by-then: as of 2026-08-02 the account cannot invoke either model at all (see the
-Slice 5 completion notes on Bedrock model access), so an eval could not have run today regardless.
+**Update 2026-08-03 — the A/B is now runnable, and there is a first data point.** The pair was
+Opus 4.8 vs Sonnet 5, neither of which this account can invoke (ADR-008 amendment), so the
+comparison was impossible regardless of labels. It is now **Sonnet 4.6 vs Haiku 4.5** — a better
+question anyway: *is the ~3× cheaper model good enough for a 15-category classification?*
 
-**Refs:** `backend/eval/`; ADR-008; Slice 5 exit criteria in `ledgerly-plan.md`; [B-7].
+The Slice-5 smoke set (8 hand-made rows — a smoke test, **not** a baseline) scored **8/8** on
+Sonnet 4.6, and the confidence distribution is the interesting part:
+
+- 0.99 on unambiguous merchants (Netflix, payroll, city utility)
+- 0.85 on Amazon, 0.80 on Walgreens — i.e. the model is least confident exactly where a *human*
+  would hesitate (Amazon sells everything; Walgreens straddles Health and Shopping)
+
+That is weak-but-real evidence the 0.8 threshold sits in a sensible region. **Boundary behaviour
+worth pinning down when Slice 7 sizes the review queue:** Walgreens scored *exactly* 0.80 and was
+auto-filed with `needsReview: false`, so the comparison is **inclusive (`>=`)** — anything landing
+precisely on the line auto-files rather than going to review. Confirm that is intended.
+
+**Refs:** `backend/eval/`; ADR-008 (+ its 2026-08-03 amendment); Slice 5 completion notes in
+`ledgerly-plan.md`; [B-7].
 
 ---
 
