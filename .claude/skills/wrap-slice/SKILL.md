@@ -91,11 +91,28 @@ gh pr create --base main
 PR body: what the slice delivers, exit criteria and how each was verified (including
 smoke-test evidence), decisions/ADRs added, doc corrections made.
 
-## 7. Hand off
+## 7. Explain the diff — advisory, not a gate
+
+Run the `explain-diff` skill against the PR just opened:
+
+```bash
+gh pr diff <N>
+```
+
+It renders `docs/explainers/YYYY-MM-DD-<slug>.html` — background, intuition, code walkthrough,
+and a five-question quiz. Commit it on the slice branch and push, so it arrives with the PR the
+owner is about to review.
+
+Ledgerly is an explicit learning vehicle, and most of the code here is agent-generated; this step
+is how the owner's understanding keeps pace with what's actually deployed. Skip it only if the
+slice is trivial or docs-only — and say so rather than silently omitting it.
+
+## 8. Hand off
 
 Tell the user, explicitly:
 
 - PR URL and what's in it.
+- The explainer path from step 7 (or why it was skipped).
 - That after they merge, the next `/start-slice` will fast-forward local `main`.
 - Any threads deliberately left open, so they land in the next session's plan rather than
   being forgotten.
