@@ -1,8 +1,8 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
-**Last updated:** 2026-07-19
+**Last updated:** 2026-08-07
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
 > significant choice recorded here has a matching ADR in `ledgerly-adl.md`
@@ -217,7 +217,7 @@ cadence change (effective next cycle, FR-4.2) never rewrites historical items.
 | 12 | Skip an already-imported file (file-level dedupe) | W | PutItem `FILEHASH#<sha256>` conditional |
 | 13 | Look up merchant rule for a normalized merchant | R | GetItem `RULE#<merchant>` |
 | 14 | Upsert merchant rule on correction | W | PutItem `RULE#<merchant>` |
-| 15 | List past cycles for the cycle picker | R | Computed from settings + first-transaction date (no table access beyond #1) |
+| 15 | List past cycles for the cycle picker | R | Computed from settings + first-transaction date (one `Limit=1` Query for the earliest `TXN#`) |
 | 16 | Text/amount filtering of transactions (FR-6.1) | R | Pattern #6 + FilterExpression (bounded: one cycle ≈ hundreds of items) |
 
 ### 2.3 Entity model
@@ -271,8 +271,8 @@ escape hatch is recorded in §1.3.
 | 1 | `GetItem(USER#s, PROFILE)` | `GET /settings` |
 | 2 | `Query pk=USER#s AND begins_with(sk, 'CAT#')` | `GET /categories` |
 | 3 | `PutItem` / `UpdateItem` | `POST/PATCH /categories[/{id}]` (archive requires reassignment choice, FR-4.5) |
-| 4 | `Query begins_with(sk, 'BUDGET#M#2026-07#')` | `GET /cycles/{cycleId}/summary` |
-| 5 | `PutItem BUDGET#<cycleId>#<catId>` | `PUT /cycles/{cycleId}/budgets/{categoryId}` |
+| 4 | `Query begins_with(sk, 'BUDGET#M#2026-07#')` | `GET /cycles/{cycleRef}/summary` |
+| 5 | `PutItem BUDGET#<cycleId>#<catId>` (or `DeleteItem` to clear) | `PUT /cycles/{cycleRef}/budgets/{categoryId}` |
 | 6 | `Query sk BETWEEN 'TXN#2026-07-01' AND 'TXN#2026-07-31~'` | `GET /transactions?from&to&…` and inside cycle summary |
 | 7 | `PutItem` + `ConditionExpression attribute_not_exists(sk)` | (import Lambda, not a route) |
 | 8 | `Query GSI1 gsi1pk=USER#s#CAT#<id> AND gsi1sk BETWEEN …` | `GET /categories/{id}/transactions?from&to` |
@@ -283,9 +283,29 @@ escape hatch is recorded in §1.3.
 | 13 | `GetItem(USER#s, RULE#<merchant>)` | (categorizer Lambda) |
 | 14 | `PutItem RULE#<merchant>` | (inside PATCH /transactions/{id}) |
 | — | presigned upload | `POST /imports` → `{uploadUrl, importId}` |
+| — | list cycles for the picker (AP 15) | `GET /cycles` |
+| 6 + enqueue | re-drive categorization over a window ([B-7]) | `POST /transactions/recategorize` |
 
 All handlers derive `<sub>` exclusively from the JWT claims that API Gateway's authorizer
 verified (FR-1.3); no route accepts a user identifier in the payload.
+
+**`{cycleRef}` is not a cycle ID** (Slice 6 implementation note; no design change — the stored
+key is still the canonical `cycleId` of §2.4). A cycle ID contains a `#` (`M#2026-07`), which
+must be percent-encoded to survive a URL; a client that got that wrong would silently address a
+*different*, nonexistent cycle, and budgets written under a bogus ID would persist and never be
+read back. So the API addresses a cycle by `current` or **any ISO date inside it**, and the
+server derives the canonical ID through the cadence history (`cycle_for`). An unroutable cycle
+therefore cannot be addressed at all, and every response echoes the resolved `cycle` object so
+the SPA never constructs an ID itself.
+
+`POST /transactions/recategorize` re-enqueues a date window's transactions for the categorizer
+(architecture §3.2's consumer, unchanged). It exists because the importer enqueues only rows it
+*newly added*, so before it there was no path to categorize a transaction that already existed —
+and ADR-012 idempotency means a re-import adds, and enqueues, nothing. Default scope is
+`uncategorized` only; `includeCategorized: true` also re-runs `auto` rows (a `force` flag on the
+message, since the categorizer's own replay-skip would otherwise ignore them). Owner-set
+`confirmed`/`corrected` statuses are excluded from both scopes, so the AP 10 correction guard is
+never even exercised.
 
 ### 2.6 Sample item shapes
 
@@ -393,8 +413,22 @@ Browser ── GET /cycles/current/summary ──► API λ
              ◄─ {cycle, perCategory: [{category, budget, actual}], totals}
 ```
 
-Past cycles (FR-5.3): same route with an explicit `{cycleId}`; the picker lists cycles
-computed from settings history + first transaction date (AP 15).
+Past cycles (FR-5.3): same route with a date inside the wanted cycle (see `{cycleRef}` in §2.5);
+the picker lists cycles computed from settings history + first transaction date (AP 15).
+
+**Aggregation semantics** (implemented in `core/budgets.summarize`, kept AWS-free so the
+arithmetic the owner trusts is unit-testable):
+
+- A row's `spentCents` is the **negated net** of its transactions, so a refund reduces spend
+  rather than inflating both money-in and money-out. A category with net inflow (Income)
+  therefore reports negative spend, which the UI renders as income rather than a budget bar.
+- A **synthetic Uncategorized row** carries transactions with no category. Without it, money the
+  pipeline hasn't filed would vanish from the one screen whose job is "where did my money go",
+  and the totals would stop reconciling against the bank statement.
+- `remainingCents` counts **only budgeted categories**: spend in a category with no budget is not
+  over-spend against a plan that was never made.
+- The transaction read is single-page ([B-2]); at the cap the response sets `totals.truncated` so
+  a dashboard that would under-report says so instead.
 
 ### 3.4 Correction (FR-6.2 → FR-3.4 learning loop)
 
@@ -564,3 +598,4 @@ resolves it.)*
 | 1.3 | 2026-07-15 | Slice-2 deployment story realized (no design change): §5.4 links ADR-011 — GitHub OIDC deploy role is narrow (assumes CDK bootstrap roles only), `prod` gated by a GitHub Environment required reviewer. |
 | 1.4 | 2026-07-19 | Slice-4 data-model refinement from real Chase exports: §2.4 transaction natural key now includes `balanceCents` (ADR-012) so legitimate same-day/-amount/-merchant charges aren't silently deduped; `IMPORT#` carries an owner-confirmed `accountLabel` (ADR-013). No change to the dedupe *mechanism* (content-hash key-equality + `FILEHASH#`). |
 | 1.5 | 2026-07-21 | Slice-5 categorization pipeline **implemented** as designed (§3.2, §4.5) — no design change to the async shape (SQS→categorizer→Bedrock + DLQ; the §1 diagram already depicted it). Impl details recorded under ADR-008: Bedrock is called via **boto3 `invoke_model`** (not the `anthropic` SDK — zero-runtime-deps) with a forced-tool structured output, and Opus 4.8 is **INFERENCE_PROFILE-only**, so the runtime model id is `us.anthropic.claude-opus-4-8` and the categorizer's IAM grant covers the inference-profile ARN + the underlying foundation-model ARN. `TXN#` items gain `confidence`/`needsReview` + GSI1 (category) / GSI2 (sparse review) keys on categorization, exactly as §2.6 sketched. |
+| 1.6 | 2026-08-07 | Slice-6 budgets & dashboard **implemented** as designed (§2.2 AP 4/5/15, §3.3) — no change to the data model: budgets still key `BUDGET#<cycleId>#<categoryId>`, cycle-major. Two §2.5 route-shape notes: (1) the API addresses a cycle by `current` or an **ISO date inside it** (`{cycleRef}`), never the raw cycle ID, because the ID's `#` would have to survive URL encoding and a mis-encoded ID would silently address a nonexistent cycle — the server derives the canonical ID from the cadence history; (2) new `POST /transactions/recategorize` re-drives categorization over a window ([B-7]), the path that never existed because the importer only enqueues newly-added rows. §3.3 gains the aggregation semantics (spend = negated net so refunds net down; a synthetic Uncategorized row so unfiled money can't vanish; `remaining` counts only budgeted categories; `truncated` when the single-page read hits its cap). AP 15 corrected: the picker needs one `Limit=1` Query for the earliest transaction, not settings alone. |

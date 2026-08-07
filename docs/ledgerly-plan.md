@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 1.1
+**Version:** 1.3
 **Created:** 2026-07-12
 
 ---
@@ -79,7 +79,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 3 | Categories, settings & budget-cycle engine | FR-4.1/4.2/4.4 | ✅ deployed (2026-07-19) | [#21](https://github.com/ocheoche-obe/ledgerly/pull/21) |
 | 4 | CSV import end-to-end | FR-2.1–2.5 | ✅ deployed (2026-07-21) | [#23](https://github.com/ocheoche-obe/ledgerly/pull/23) |
 | 5 | AI categorization pipeline + eval harness | FR-3.1–3.3, 3.5 | ✅ complete (2026-08-03) — deployed 2026-07-21, broken on arrival (Opus 4.8 not invocable on this account), model → Sonnet 4.6, verified live 8/8 in ~24s. Eval baseline deferred ([B-8]) | [#25](https://github.com/ocheoche-obe/ledgerly/pull/25), [#41](https://github.com/ocheoche-obe/ledgerly/pull/41) |
-| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | ⬜ — now **includes [B-7]** (recategorize endpoint) as a prerequisite, owner-approved 2026-08-03 | — |
+| 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | 🔨 started 2026-08-07 — **includes [B-7]** (recategorize endpoint) as its first task, owner-approved 2026-08-03 | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
 
@@ -506,15 +506,108 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
     with realistic category distribution.
   - Only the 8 synthetic `slice5-smoke-checking` rows are currently categorized; they exist
     precisely so there is *some* real categorized data to develop against until this lands.
-- **Scope out:** trends across cycles (parking lot).
-- **⚠ Open decisions:** dashboard visual design — a proposed layout brought to owner
-  early in the slice.
+- **Scope out:** trends across cycles (parking lot); FR-4.5 archive-reassignment (stays Slice 7,
+  where it can be wired to real transactions); the app-wide visual pass ([B-3] — this slice styles
+  the dashboard only).
+
+#### Dev-data reality, surveyed at slice start (2026-08-07)
+
+The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in 2026-06,
+94 in 2026-07) and the **8 auto-categorized synthetic rows** (`slice5-smoke-checking`,
+2026-08-01/02). **No `BUDGET#` items exist at all.** Two consequences that shape the build order:
+
+1. **All real data is in past cycles.** The profile's cadence history is monthly from
+   2026-07-01, then **biweekly** (anchor 2026-07-24) effective 2026-08-01 — a Slice-3
+   smoke-test artifact — so *today's* cycle is `08-07 → 08-20` and holds **zero** transactions.
+   Even with [B-7] fully backfilled, the default dashboard screen would render empty on dev.
+   **The past-cycle picker (FR-5.3) is therefore load-bearing for verification, not a trailing
+   nice-to-have** — build it alongside the dashboard, not after it.
+2. **Budget amounts are owner input.** Budget-vs-actual can't be verified until amounts exist
+   for `M#2026-06` / `M#2026-07`; entering them through the new UI *is* part of the smoke test.
+
+- **⚠ Open decisions — all resolved with the owner 2026-08-07:**
+  1. **Recategorize scope: uncategorized-only by default, with an explicit
+     `includeCategorized: true` opt-in.** A mistyped window can't disturb auto-filed rows, and
+     the opt-in is the exact capability Slice 7's review queue needs — building it now is what
+     made "endpoint, not script" worth it. (AP 10 is correction-preserving regardless, so
+     `confirmed`/`corrected` rows survive either path.)
+  2. **Dev cadence reverted to monthly.** The biweekly entry is a Slice-3 smoke-test leftover,
+     not a real preference. Note the app's own `plan_cadence_change` is
+     effective-*next*-cycle by design (FR-4.2), so reverting through the API would leave the
+     artifact in history — the fix is a direct edit of the dev `PROFILE` item's `cadences[]`
+     (dev-only test-data cleanup, recorded here rather than done silently). Result: `M#2026-06`
+     and `M#2026-07` become clean monthly cycles full of real data, and the current cycle
+     (`M#2026-08`) holds the 8 smoke rows.
+  3. **Dashboard gets a real design pass — dashboard only.** NFR-7.1 ("understandable from one
+     screen without scrolling on desktop") is a *design* requirement, not a layout accident, so
+     the core screen is built properly: category rows with budget/actual bars, over-budget
+     states, a totals band, responsive breakpoints. Verified in a real browser via the Playwright
+     MCP. [B-3]'s app-wide pass stays deferred; the other panels are untouched.
+  4. **No new ADR for the recategorize route** — it is existing AP 6 (date-window query) plus the
+     existing `enqueue_categorization` seam, with no new design. It **is** a new API route, so
+     architecture §2.5's AP→route table gets the row (doc update, not a decision record).
+- **Folded in from the backlog:** **[B-6]** — pin `infra/requirements.txt` to compatible-minor
+  bounds. Its trigger was "the next infra-touching slice", and this slice adds Lambdas and routes.
+  Closes the gap where a locally-reviewed `cdk diff` and CI's deployed template can be synthesized
+  by different `aws-cdk-lib` versions (ADR-004's review habit depends on them matching).
 - **Exit criteria:** ☐ [B-7] the 153 backlog transactions are categorized via the new endpoint
   ☐ owner answers "where is my money going, am I over anywhere?" from one deployed screen
-  ☐ works on phone browser ☐ past cycles viewable ☐ docs current.
+  ☐ works on phone browser ☐ past cycles viewable (and *used* — June/July are where the real
+  data lives) ☐ budget amounts settable per category per cycle, and an over-budget category
+  reads as over at a glance ☐ dashboard renders < ~2s (NFR-2.1) with no desktop scroll (NFR-7.1)
+  ☐ docs current.
 - **⚠ Verify live, not just deployed.** Per the convention added after Slice 5: a green deploy is
   not evidence the feature works. Every ☐ above is checked against the deployed stack.
-- **Completion notes:** _—_
+- **Completion notes:** _🔨 code-complete 2026-08-07; live exit criteria open until the pipeline
+  deploys on merge. Local gates green: **216 backend tests** (was 164) + **19 frontend** (was 13);
+  ruff clean; `cdk synth` green dev + prod; `/security-review` no findings._
+  - **[B-7] `POST /transactions/recategorize`** — the re-drive path, built first as agreed.
+    Default scope is `uncategorized` only; `includeCategorized: true` widens it to `auto` rows.
+    **The design point worth remembering:** the categorizer *already* skipped anything not
+    `uncategorized` (that skip is what makes SQS redelivery free), so the opt-in could not be a
+    filter at the enqueue site — it had to travel in the message as a `force` flag and be honoured
+    by the consumer. Owner `confirmed`/`corrected` statuses are excluded from both scopes, so
+    AP 10's correction guard is never even exercised.
+  - **Budgets + summary.** `core/budgets.py` holds both the budget item and — deliberately —
+    the whole dashboard aggregation, AWS-free, because the arithmetic the owner reads and trusts
+    should be unit-testable without any AWS. `adapters/dynamo.py` gained `list_budgets` (AP 4),
+    `put_budget`/`delete_budget` (AP 5), `first_transaction_date` (AP 15's lower bound);
+    `core/cycles.py` gained `previous_cycle`/`recent_cycles` for the picker. New `api_cycles`
+    Lambda serves `GET /cycles`, `GET /cycles/{cycleRef}/summary`,
+    `PUT /cycles/{cycleRef}/budgets/{categoryId}`.
+  - **Implementation call (no ADR — recorded in architecture §2.5):** a cycle is addressed in the
+    API by `current` **or any ISO date inside it**, never the raw cycle ID. Cycle IDs contain a
+    `#` (`M#2026-07`) that must be percent-encoded to survive a URL, and a client that got the
+    encoding wrong would silently address a *different, nonexistent* cycle — budgets written under
+    a bogus ID would persist and never be read back. Resolving a date through the cadence history
+    means the server derives the canonical ID, so an unroutable cycle cannot be addressed at all.
+  - **Aggregation semantics** (pinned by tests, since they are what "actual" *means*): spend is
+    the **negated net**, so a refund reduces spend instead of inflating both sides; a synthetic
+    **Uncategorized row** carries unfiled money, without which it would vanish from the one screen
+    whose job is "where did my money go" and the totals would stop reconciling against the bank;
+    `remaining` counts **only budgeted categories**, since spend in an unbudgeted category is not
+    over-spend against a plan that was never made.
+  - **Clearing a budget deletes the item** rather than storing zero — "no target" is the item's
+    absence (§2.3), and a stored `0` would render as a $0 budget that everything is instantly over.
+  - **Dashboard design pass** (owner decision 3). Real stylesheet rather than inline styles,
+    because the layout needs media queries (FR-5.4) and `:hover`/`:focus` — neither expressible
+    inline — still with zero CSS dependencies. Verified in Chromium via the Playwright MCP against
+    realistic data (15 categories, a 94-transaction month): **the full band + 15 rows fit a
+    1440×900 viewport with ~180px to spare**, so NFR-7.1's no-scroll claim holds with real
+    category counts; the phone layout (390×844) reflows to two lines per row with no horizontal
+    scrolling. `styles.ts` `main` widened 640→880px so rows keep name · bar · spent · budget ·
+    remaining on one line — the only shared-style change; [B-3]'s app-wide pass stays deferred.
+  - **[B-6] closed.** `infra/requirements.txt` pinned to compatible-minor
+    (`aws-cdk-lib>=2.263.0,<2.264`, `constructs>=10.8.1,<10.9`). Found *and fixed* the drift it
+    warned about: the local infra venv was on **2.261.0**, below the file's own floor, so local
+    `cdk diff` and CI were provably synthesizing with different libraries. Upgraded the venv and
+    diffed both templates — **no property drift** (the only deltas were the SPA asset hash from
+    this slice's own frontend build, and CDK's version-stamped analytics blob).
+  - **Dev data fix (decision 2):** the stray biweekly cadence was removed by direct edit of the
+    `PROFILE` item — prior value
+    `[{monthly, 2026-07-01}, {biweekly, anchor 2026-07-24, from 2026-08-01}]`, now monthly only.
+    The API path could not do this: `plan_cadence_change` is effective-*next*-cycle by design
+    (FR-4.2), so reverting through it would have left the artifact in history.
 
 ### Slice 7 — Review queue, corrections & transaction management ⬜
 
@@ -596,4 +689,6 @@ slice roadmap below (slices 1–8, owner-approved 2026-07-13). Next: Slice 1 via
 | 0.8 | 2026-07-19 | Slice 3 ✅ deployed (dev + prod via pipeline on merge of #21). All exit criteria met: owner smoke-tested dev, unauth/bad-token → 401 verified. Next: Slice 4 — CSV import (needs owner's sample bank CSVs at start) |
 | 0.9 | 2026-07-19 | Slice 4 🔨 code-complete: CSV import end-to-end (presigned upload → S3 → import Lambda → transactions), FR-2.1–2.5. ADR-012 (natural key incl. balance) + ADR-013 (account label at upload) recorded from the owner's real Chase exports; architecture → v1.4. New `IngestConstruct`; 124 backend + 13 frontend tests. Deploy + live smoke-test via pipeline on merge (Option A) — those exit criteria stay open until then |
 | 1.0 | 2026-07-21 | Slice 4 ✅ deployed (PR #23 merged); owner smoke-tested live — same-file re-upload 0 added, overlapping export only new rows added (FR-2.2 confirmed end-to-end). All exit criteria met. `ledgerly-backlog.md` introduced (build-time observation inbox); B-1 (account picker, from the smoke test), B-2 (txn pagination/window), B-3 (frontend visual pass) seeded. Next: Slice 5 — AI categorization pipeline + eval harness |
+| 1.3 | 2026-08-07 | Slice 6 🔨 code-complete: [B-7] `POST /transactions/recategorize` (uncategorized-only by default, `includeCategorized` → a `force` flag the *categorizer* honours, since its own replay-skip would otherwise ignore re-runs); budgets per category per cycle (AP 4/5) + `GET /cycles/{cycleRef}/summary` (AP 4+6) + `GET /cycles` picker (AP 15); dashboard with a real design pass, browser-verified at 1440×900 (fits, NFR-7.1) and 390×844 (FR-5.4). Cycles are addressed by `current`-or-ISO-date, not raw cycle IDs (architecture §2.5 note; no ADR). [B-6] closed — infra pinned to compatible-minor, and the drift it predicted was real (local venv 2.261.0 vs the file's own 2.262.2 floor); no template drift after upgrading. Architecture → v1.6. 216 backend + 19 frontend tests. Live exit criteria open until the pipeline deploys on merge |
+| 1.2 | 2026-08-07 | Slice 6 🔨 started. Dev-data survey at slice start found all real data sits in *past* cycles (59 June + 94 July, uncategorized) and dev's cadence is a stray biweekly from a Slice-3 smoke test → the current cycle is empty, making the FR-5.3 cycle picker load-bearing for verification. Four ⚠ decisions resolved with the owner: [B-7] recategorize = uncategorized-only with an `includeCategorized` opt-in; dev cadence reverted to monthly; a real design pass for the dashboard only ([B-3] still deferred); no ADR for the new route (architecture §2.5 route table updated instead). [B-6] (pin `infra/requirements.txt`) folded in — this is the next infra-touching slice. Exit criteria extended to cover budget editing, NFR-2.1 and NFR-7.1 |
 | 1.1 | 2026-07-21 | Slice 5 🔨 code-complete: async AI categorization (SQS+DLQ → categorizer → Bedrock Claude Opus 4.8) + eval harness, FR-3.1–3.3/3.5. `core/categorize/` decision matrix + `merchant_rules` + `bedrock`/`sqs` adapters + `CategorizationConstruct`; 164 backend/13 frontend tests. Threshold 0.8 (owner-approved); harness A/Bs Opus 4.8 vs Sonnet 5 (owner-agreed, 2026-07-21). ADR-008 impl notes added (boto3 not `anthropic` SDK; Opus 4.8 is INFERENCE_PROFILE-only → `us.anthropic.…` id + profile/FM IAM grant). Deploy + live smoke + eval baseline via pipeline on merge (Option A) — those exit criteria stay open until then; owner's labeled sample still needed for the baseline number |

@@ -1,7 +1,7 @@
 # Ledgerly — Build-Time Backlog
 
 **Status:** Living document — append as things are noticed; triage as slices are planned
-**Version:** 0.1
+**Version:** 0.2
 **Created:** 2026-07-21
 
 ---
@@ -47,8 +47,8 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-3 | Frontend is intentionally basic (inline styles) — visual pass deferred | Slice 1 | UX / polish | 🔎 | later (dedicated polish pass) |
 | B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
 | B-5 | Dependabot's two **pip** groups don't actually group — one PR per package | 2026-08 wave | process / noise | 🆕 | verify at the next monthly run |
-| B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | 🆕 | next infra-touching slice |
-| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | 🔎 | **Slice 6, first task** — `POST /transactions/recategorize` (owner-approved 2026-08-03) |
+| B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | ✅ | **Done in Slice 6** (2026-08-07) — pinned to compatible-minor; the predicted drift was real |
+| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | ✅ | **Built in Slice 6** (2026-08-07) — `POST /transactions/recategorize`; ⚠ closes fully once run live |
 | B-8 | Eval baseline deferred by owner until the app is more fully built | Slice 5 live test | process / quality | 🔎 | revisit after Slice 7 |
 
 ---
@@ -194,6 +194,16 @@ diffed against the live dev stack during this triage.
 adopt a proper lockfile (`pip-compile`/`uv`) for infra. The lockfile is the better end state
 since infra is deploy-critical; the bound is the five-minute version.
 
+**✅ Done 2026-08-07 (Slice 6)** — took the bound: `aws-cdk-lib>=2.263.0,<2.264`,
+`constructs>=10.8.1,<10.9`. **The predicted drift was already real and worse than described:**
+the local infra venv was on **2.261.0 / 10.6.0** — *below this file's own `>=2.262.2` floor* — so
+every local `cdk synth`/`cdk diff` this slice was being produced by a library CI would never
+install. Upgrading the venv and diffing the before/after `Ledgerly-dev` templates found **no
+property drift** (only the SPA asset hash, which this slice's own frontend build changed, and
+CDK's version-stamped `CDKMetadata.Analytics` blob) — so nothing was actually mis-deployed, but
+the review habit ADR-004 depends on had been running on the wrong inputs. A lockfile is still the
+better end state; revisit if the bound proves noisy.
+
 **Refs:** `infra/requirements.txt`; #35; ADR-004; relates to [B-5].
 
 ---
@@ -229,6 +239,22 @@ existing parts is the whole job. Safe to run more than once by construction.
 
 The importer docstring already anticipates this — "a lost enqueue costs a re-drive at worst" — but
 no re-drive mechanism was ever built.
+
+**✅ Built 2026-08-07 (Slice 6, first task).** `POST /transactions/recategorize {from, to,
+includeCategorized?}` → 202 with `{scanned, enqueued, messages}`. Marked done because the
+mechanism exists and is tested; ⚠ the *stranded data* is only rescued once it is actually run
+against dev — that is a Slice 6 exit criterion, not something a merge proves.
+
+**What the build turned up that the entry didn't anticipate:** the opt-in could not be implemented
+as a filter at the enqueue site. The categorizer independently skips any transaction whose status
+isn't `uncategorized` — that skip is precisely what makes SQS at-least-once redelivery a cheap
+no-op — so enqueueing an already-`auto` row would have been silently dropped by the consumer.
+`includeCategorized` therefore travels *in the message* as a `force` flag that the categorizer
+honours. Owner `confirmed`/`corrected` rows are excluded from both scopes, so AP 10's
+correction-preserving guard is never even reached.
+
+A second, smaller finding: the window query is single-page (see [B-2]), so a bulk backfill could
+have quietly stopped at 500 rows — the response now sets `truncated` and says to narrow the window.
 
 **Refs:** `backend/functions/importer/handler.py` (~line 120); `backend/adapters/sqs.py`;
 relates to [B-4] and to FR-3.5.
@@ -283,3 +309,4 @@ precisely on the line auto-files rather than going to review. Confirm that is in
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-07-21 | Backlog doc created (seeded B-1 account picker, B-2 txn pagination/window, B-3 frontend visual pass). Boundary vs. the plan's post-MVP parking lot + the triage flow defined. |
+| 0.2 | 2026-08-07 | Slice 6: [B-7] built (`POST /transactions/recategorize` — needs a live run to actually rescue the stranded data) and [B-6] closed (infra pinned to compatible-minor; the predicted drift was real — local venv was below the file's own floor — but produced no template drift). Both marked ✅ with their findings recorded. |
