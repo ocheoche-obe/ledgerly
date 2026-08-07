@@ -7,6 +7,7 @@ and never rewrites a past cycle.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -209,7 +210,7 @@ def test_recent_cycles_spans_a_cadence_change_without_gaps_or_overlaps():
     )
     cycles = recent_cycles(cadences, today=date(2026, 9, 20), earliest=date(2026, 6, 1))
     ordered = list(reversed(cycles))
-    for earlier, later in zip(ordered, ordered[1:]):
+    for earlier, later in pairwise(ordered):
         assert later.start == earlier.end + timedelta(days=1)
 
 

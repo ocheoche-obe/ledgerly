@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from core.budgets import budget_prefix, budget_sk, budget_view, new_budget
 from core.categories import (
     STATUS_ACTIVE,
     category_view,
@@ -23,7 +24,6 @@ from core.categories import (
     starter_categories,
     validate_status,
 )
-from core.budgets import budget_prefix, budget_sk, budget_view, new_budget
 from core.categorize import Decision
 from core.cycles import plan_cadence_change, today_utc
 from core.imports import import_view, new_import
