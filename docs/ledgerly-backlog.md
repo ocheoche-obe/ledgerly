@@ -1,7 +1,7 @@
 # Ledgerly — Build-Time Backlog
 
 **Status:** Living document — append as things are noticed; triage as slices are planned
-**Version:** 0.1
+**Version:** 0.3
 **Created:** 2026-07-21
 
 ---
@@ -47,9 +47,10 @@ When an item is promoted or dropped, mark it Done/Dropped here with a pointer, d
 | B-3 | Frontend is intentionally basic (inline styles) — visual pass deferred | Slice 1 | UX / polish | 🔎 | later (dedicated polish pass) |
 | B-4 | Categorizer rule-hit path doesn't validate the rule's category is still active | Slice 5 | correctness / data-integrity | 🔎 | Slice 7 (rule creation) |
 | B-5 | Dependabot's two **pip** groups don't actually group — one PR per package | 2026-08 wave | process / noise | 🆕 | verify at the next monthly run |
-| B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | 🆕 | next infra-touching slice |
-| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | 🔎 | **Slice 6, first task** — `POST /transactions/recategorize` (owner-approved 2026-08-03) |
+| B-6 | `infra/requirements.txt` has the unbounded-minor exposure just fixed in `backend/` | 2026-08 wave | tech-debt / reproducibility | ✅ | **Done in Slice 6** (2026-08-07) — pinned to compatible-minor; the predicted drift was real |
+| B-7 | No backfill path — the 153 already-imported transactions can never be categorized | Slice 5 live test | correctness / UX | ✅ | **Built in Slice 6** (2026-08-07) — `POST /transactions/recategorize`; ⚠ closes fully once run live |
 | B-8 | Eval baseline deferred by owner until the app is more fully built | Slice 5 live test | process / quality | 🔎 | revisit after Slice 7 |
+| B-9 | Local venvs drift *below* their manifests' own floors — local gates are weaker than CI | Slice 6 | process / tooling | 🆕 | a `make check` / bootstrap script, or a CI-parity note |
 
 ---
 
@@ -194,6 +195,16 @@ diffed against the live dev stack during this triage.
 adopt a proper lockfile (`pip-compile`/`uv`) for infra. The lockfile is the better end state
 since infra is deploy-critical; the bound is the five-minute version.
 
+**✅ Done 2026-08-07 (Slice 6)** — took the bound: `aws-cdk-lib>=2.263.0,<2.264`,
+`constructs>=10.8.1,<10.9`. **The predicted drift was already real and worse than described:**
+the local infra venv was on **2.261.0 / 10.6.0** — *below this file's own `>=2.262.2` floor* — so
+every local `cdk synth`/`cdk diff` this slice was being produced by a library CI would never
+install. Upgrading the venv and diffing the before/after `Ledgerly-dev` templates found **no
+property drift** (only the SPA asset hash, which this slice's own frontend build changed, and
+CDK's version-stamped `CDKMetadata.Analytics` blob) — so nothing was actually mis-deployed, but
+the review habit ADR-004 depends on had been running on the wrong inputs. A lockfile is still the
+better end state; revisit if the bound proves noisy.
+
 **Refs:** `infra/requirements.txt`; #35; ADR-004; relates to [B-5].
 
 ---
@@ -229,6 +240,22 @@ existing parts is the whole job. Safe to run more than once by construction.
 
 The importer docstring already anticipates this — "a lost enqueue costs a re-drive at worst" — but
 no re-drive mechanism was ever built.
+
+**✅ Built 2026-08-07 (Slice 6, first task).** `POST /transactions/recategorize {from, to,
+includeCategorized?}` → 202 with `{scanned, enqueued, messages}`. Marked done because the
+mechanism exists and is tested; ⚠ the *stranded data* is only rescued once it is actually run
+against dev — that is a Slice 6 exit criterion, not something a merge proves.
+
+**What the build turned up that the entry didn't anticipate:** the opt-in could not be implemented
+as a filter at the enqueue site. The categorizer independently skips any transaction whose status
+isn't `uncategorized` — that skip is precisely what makes SQS at-least-once redelivery a cheap
+no-op — so enqueueing an already-`auto` row would have been silently dropped by the consumer.
+`includeCategorized` therefore travels *in the message* as a `force` flag that the categorizer
+honours. Owner `confirmed`/`corrected` rows are excluded from both scopes, so AP 10's
+correction-preserving guard is never even reached.
+
+A second, smaller finding: the window query is single-page (see [B-2]), so a bulk backfill could
+have quietly stopped at 500 rows — the response now sets `truncated` and says to narrow the window.
 
 **Refs:** `backend/functions/importer/handler.py` (~line 120); `backend/adapters/sqs.py`;
 relates to [B-4] and to FR-3.5.
@@ -278,8 +305,48 @@ precisely on the line auto-files rather than going to review. Confirm that is in
 
 ---
 
+### B-9 — Local venvs sit below their own manifests' floors, so local gates are weaker than CI 🆕
+
+**Noticed:** Slice 6 (twice, in one slice). **Type:** process / tooling.
+
+Neither venv in this repo satisfied the requirements file it was created from:
+
+| venv | manifest floor | actually installed | consequence |
+|---|---|---|---|
+| `infra/.venv` | `aws-cdk-lib>=2.262.2` | **2.261.0** | local `cdk synth`/`cdk diff` used a library CI would never install ([B-6]) |
+| `backend/.venv` | `ruff>=0.16.0` | **0.15.21** | local `ruff check` passed clean; CI failed on two violations |
+
+The ruff case is the sharper one, and it is the *same* release [B-6]'s entry already discusses:
+ruff 0.16 broadened its default rule set, so 0.15.21 locally could not see rules CI enforces.
+The slice's local lint gate reported "All checks passed!" on code that CI rejected (`I001`
+import ordering, `RUF007` `zip`→`pairwise`) — a green local gate that meant nothing.
+
+**Why it happens:** venvs are created once and never re-synced. `pip install -r` is a manual
+step nobody re-runs, and bumping a *floor* in the manifest (as #35 did for ruff) does not touch
+an existing environment. Nothing anywhere compares the two, so the gap is silent and only
+surfaces as a surprise red CI on an otherwise finished branch.
+
+**Why it matters beyond annoyance:** the whole point of running lint/tests/synth locally is to
+predict CI. When the local toolchain is *older* than CI's, that prediction is unsound in the one
+direction that wastes a round trip — and for `cdk`, it silently weakens ADR-004's "review the
+diff before every deploy" habit, since the reviewed diff and the deployed template can come from
+different generators.
+
+**Candidate fixes** (unscheduled): a `make check` (or `scripts/check.sh`) that runs
+`pip install -qr <manifest>` before the gate in both trees, so the environment self-heals; or a
+`--require-hashes`-style lockfile per tree; or, cheapest, a documented "re-sync your venvs"
+line in CLAUDE.md's lint/test convention. The `make check` route also collapses the four
+commands the conventions currently list into one.
+
+**Refs:** `backend/requirements-dev.txt`; `infra/requirements.txt`; [B-6]; #35; ADR-004;
+CI failure on PR #44.
+
+---
+
 ## Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-07-21 | Backlog doc created (seeded B-1 account picker, B-2 txn pagination/window, B-3 frontend visual pass). Boundary vs. the plan's post-MVP parking lot + the triage flow defined. |
+| 0.3 | 2026-08-07 | [B-9] added from a red CI on PR #44: both venvs were installed *below their own manifests' floors* (ruff 0.15.21 vs `>=0.16.0`; aws-cdk-lib 2.261.0 vs `>=2.262.2`), so the local lint gate passed on code CI rejected. |
+| 0.2 | 2026-08-07 | Slice 6: [B-7] built (`POST /transactions/recategorize` — needs a live run to actually rescue the stranded data) and [B-6] closed (infra pinned to compatible-minor; the predicted drift was real — local venv was below the file's own floor — but produced no template drift). Both marked ✅ with their findings recorded. |

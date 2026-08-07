@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from core.budgets import budget_prefix, budget_sk, budget_view, new_budget
 from core.categories import (
     STATUS_ACTIVE,
     category_view,
@@ -314,7 +315,15 @@ def put_transaction(sub: str, item_body: dict) -> bool:
         raise
 
 
-def query_transactions(sub: str, *, date_from: str, date_to: str, limit: int = 500) -> list[dict]:
+# Single-page cap for the window query. Callers that must not miss rows (the recategorize
+# backfill) compare their result count against this to detect a truncated page — pagination
+# itself lands with filters/search in Slice 7 ([B-2]).
+TXN_QUERY_LIMIT = 500
+
+
+def query_transactions(
+    sub: str, *, date_from: str, date_to: str, limit: int = TXN_QUERY_LIMIT
+) -> list[dict]:
     """AP 6 — transactions in an inclusive date window, oldest first (`TXN#<date>#…`).
 
     The upper bound uses `TXN#<date_to>~`: '~' sorts after '#' and every digit, so the whole
@@ -429,3 +438,49 @@ def apply_categorization(sub: str, date_str: str, txn_id: str, decision: Decisio
         if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return False  # owner already decided — preserve it
         raise
+
+
+# --- budgets & dashboard (Slice 6, FR-4.3/FR-5) ----------------------------------------
+
+
+def list_budgets(sub: str, cycle_id: str) -> list[dict]:
+    """AP 4 — every budget set for one cycle, in one Query (the key is cycle-major, §2.4)."""
+    items = _table.query(
+        KeyConditionExpression=Key("pk").eq(_pk(sub))
+        & Key("sk").begins_with(budget_prefix(cycle_id)),
+    ).get("Items", [])
+    return [budget_view(i) for i in items]
+
+
+def put_budget(sub: str, cycle_id: str, category_id: str, amount_cents: int) -> dict:
+    """AP 5 — set (or overwrite) one category's budget for one cycle (FR-4.3).
+
+    A plain put: budgets are a value the owner states, not an event log, so re-stating one is
+    idempotent. Amounts differ freely from cycle to cycle because the cycle is part of the key.
+    """
+    body = new_budget(cycle_id, category_id, amount_cents)  # validates (raises ValueError)
+    item = {"pk": _pk(sub), "sk": budget_sk(cycle_id, category_id), **body}
+    _table.put_item(Item=item)
+    return budget_view(item)
+
+
+def delete_budget(sub: str, cycle_id: str, category_id: str) -> None:
+    """Clear a budget (FR-4.3) — the item's *absence* is what "no target" means (§2.3), so
+    unsetting deletes rather than storing a zero, which would read as a $0 target."""
+    _table.delete_item(Key={"pk": _pk(sub), "sk": budget_sk(cycle_id, category_id)})
+
+
+def first_transaction_date(sub: str) -> str | None:
+    """The oldest transaction's date, or None when there are none (AP 15's lower bound).
+
+    One Query, `Limit=1`, ascending — the sort key is date-ordered, so the first item found is
+    the earliest. Bounds the cycle picker to cycles the owner actually has data for.
+    """
+    items = _table.query(
+        KeyConditionExpression=Key("pk").eq(_pk(sub)) & Key("sk").begins_with("TXN#"),
+        ProjectionExpression="#d",
+        ExpressionAttributeNames={"#d": "date"},
+        Limit=1,
+        ScanIndexForward=True,
+    ).get("Items", [])
+    return items[0]["date"] if items else None

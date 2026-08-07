@@ -97,9 +97,11 @@ class _Env:
     def inject(self, categorizer):
         self.handler._categorizer = categorizer
 
-    def run(self, txn_keys, *, message_id="m1"):
-        event = {"Records": [{"messageId": message_id,
-                              "body": json.dumps({"sub": SUB, "txnKeys": txn_keys})}]}
+    def run(self, txn_keys, *, message_id="m1", force=False):
+        body = {"sub": SUB, "txnKeys": txn_keys}
+        if force:
+            body["force"] = True
+        event = {"Records": [{"messageId": message_id, "body": json.dumps(body)}]}
         return self.handler.handler(event, None)
 
     def raw(self, txn_id, date):
@@ -187,6 +189,35 @@ def test_replay_of_categorized_batch_is_a_noop(cat):
 
     # Second run finds the txn already 'auto' → skips it, so no second LLM call.
     assert fake.calls == 1
+
+
+def test_force_re_runs_an_already_categorized_txn(cat):
+    # [B-7]'s `includeCategorized` opt-in: the same skip that makes a replay free must be
+    # bypassable, or a prompt/model change could never be re-applied to filed transactions.
+    cat.seed_txn("t6f", date="2026-07-08", merchant="trader joes")
+    fake = FakeCategorizer({"t6f": (CAT_FOOD, 0.95)})
+    cat.inject(fake)
+    keys = [{"date": "2026-07-08", "txnId": "t6f"}]
+
+    cat.run(keys)
+    fake.mapping["t6f"] = (CAT_RENT, 0.99)  # model now says something different
+    cat.run(keys, force=True)
+
+    assert fake.calls == 2
+    assert cat.raw("t6f", "2026-07-08")["categoryId"] == CAT_RENT
+
+
+def test_force_still_skips_owner_set_statuses(cat):
+    # force widens the scope to `auto`, never to the owner's own decisions — those must not
+    # even reach the model (the conditional write would discard the answer anyway).
+    cat.seed_txn("t8", date="2026-07-10", merchant="trader joes", status="confirmed")
+    fake = FakeCategorizer({"t8": (CAT_RENT, 0.99)})
+    cat.inject(fake)
+
+    cat.run([{"date": "2026-07-10", "txnId": "t8"}], force=True)
+
+    assert fake.calls == 0
+    assert cat.raw("t8", "2026-07-10")["categoryStatus"] == "confirmed"
 
 
 def test_owner_correction_is_never_overwritten(cat):

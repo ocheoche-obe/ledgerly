@@ -140,6 +140,39 @@ def next_cycle_start(cadences: list[dict], on: date) -> date:
     return cycle_for(cadences, on).end + timedelta(days=1)
 
 
+def previous_cycle(cadences: list[dict], cycle: Cycle) -> Cycle:
+    """The cycle immediately before `cycle` — the day before its start resolves it."""
+    return cycle_for(cadences, cycle.start - timedelta(days=1))
+
+
+def recent_cycles(
+    cadences: list[dict],
+    *,
+    today: date,
+    earliest: date | None = None,
+    max_cycles: int = 24,
+) -> list[Cycle]:
+    """Cycles for the picker (AP 15), newest first — current, then back through history.
+
+    Walks backwards from today's cycle rather than forwards from `earliest`, so the list is
+    always anchored on the cycle the owner is in, and always contains it. `earliest` is the
+    owner's first transaction date; the walk stops once a cycle ends before it, since there is
+    nothing to see further back. ``earliest=None`` means no transactions exist at all → just
+    the current cycle. `max_cycles` bounds the walk so a very old back-dated import cannot
+    produce an unbounded picker.
+    """
+    current = cycle_for(cadences, today)
+    if earliest is None:
+        return [current]
+    cycles = [current]
+    while len(cycles) < max_cycles:
+        prev = previous_cycle(cadences, cycles[-1])
+        if prev.end < earliest:
+            break
+        cycles.append(prev)
+    return cycles
+
+
 def plan_cadence_change(
     cadences: list[dict],
     *,

@@ -6,7 +6,8 @@ and never rewrites a past cycle.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -16,6 +17,8 @@ from core.cycles import (
     cycle_id_for,
     next_cycle_start,
     plan_cadence_change,
+    previous_cycle,
+    recent_cycles,
 )
 
 MONTHLY = [{"kind": "monthly", "effectiveFrom": "2026-01-01"}]
@@ -166,3 +169,58 @@ def test_three_cadence_history_resolves_each_era():
 def test_empty_cadences_raises():
     with pytest.raises(ValueError, match="no cadences"):
         cycle_for([], date(2026, 7, 1))
+
+
+# --- the cycle picker (AP 15, FR-5.3) ---------------------------------------------------
+
+
+def test_recent_cycles_walks_back_from_today_newest_first():
+    cycles = recent_cycles(
+        MONTHLY, today=date(2026, 8, 7), earliest=date(2026, 6, 12)
+    )
+    assert [c.cycle_id for c in cycles] == ["M#2026-08", "M#2026-07", "M#2026-06"]
+    assert cycles[0].start == date(2026, 8, 1)
+
+
+def test_recent_cycles_stops_at_the_first_transaction():
+    # A cycle that ends before the owner's earliest transaction has nothing to show.
+    cycles = recent_cycles(MONTHLY, today=date(2026, 8, 7), earliest=date(2026, 7, 1))
+    assert [c.cycle_id for c in cycles] == ["M#2026-08", "M#2026-07"]
+
+
+def test_recent_cycles_with_no_transactions_is_just_the_current_cycle():
+    assert [c.cycle_id for c in recent_cycles(MONTHLY, today=date(2026, 8, 7), earliest=None)] == [
+        "M#2026-08"
+    ]
+
+
+def test_recent_cycles_is_bounded():
+    # A very old back-dated import must not produce an unbounded picker.
+    cycles = recent_cycles(
+        MONTHLY, today=date(2026, 8, 7), earliest=date(1999, 1, 1), max_cycles=5
+    )
+    assert len(cycles) == 5
+
+
+def test_recent_cycles_spans_a_cadence_change_without_gaps_or_overlaps():
+    # Walking back across a monthly→biweekly boundary must tile the timeline exactly: each
+    # cycle starts the day after the previous one ends, including the clamped transition cycle.
+    cadences = plan_cadence_change(
+        MONTHLY, kind="biweekly", anchor=date(2026, 7, 24), today=date(2026, 7, 10)
+    )
+    cycles = recent_cycles(cadences, today=date(2026, 9, 20), earliest=date(2026, 6, 1))
+    ordered = list(reversed(cycles))
+    for earlier, later in pairwise(ordered):
+        assert later.start == earlier.end + timedelta(days=1)
+
+
+def test_biweekly_picker_stays_phase_locked_walking_backwards():
+    cycles = recent_cycles(BIWEEKLY, today=date(2026, 7, 15), earliest=date(2026, 6, 20))
+    assert [c.cycle_id for c in cycles] == ["B#2026-07-10", "B#2026-06-26", "B#2026-06-12"]
+
+
+def test_previous_cycle_is_the_one_ending_the_day_before():
+    current = cycle_for(MONTHLY, date(2026, 8, 7))
+    prev = previous_cycle(MONTHLY, current)
+    assert prev.cycle_id == "M#2026-07"
+    assert prev.end == current.start - timedelta(days=1)

@@ -5,7 +5,10 @@ import type { CSSProperties } from "react";
 export const styles: Record<string, CSSProperties> = {
   main: {
     fontFamily: "system-ui, sans-serif",
-    maxWidth: 640,
+    // Widened in Slice 6: the dashboard's per-category rows (name · bar · spent · budget ·
+    // remaining) need the horizontal room to stay on one line, which is what makes NFR-7.1's
+    // no-scroll desktop glance achievable. The other panels simply inherit the wider column.
+    maxWidth: 880,
     margin: "3rem auto",
     padding: "0 1rem",
     lineHeight: 1.5,

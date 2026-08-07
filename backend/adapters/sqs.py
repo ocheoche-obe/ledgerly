@@ -31,12 +31,18 @@ _client = boto3.client(
 _MAX_KEYS_PER_MESSAGE = 20
 
 
-def enqueue_categorization(sub: str, txn_keys: list[dict]) -> int:
-    """Enqueue categorization jobs for freshly-added transactions. Returns the message count.
+def enqueue_categorization(sub: str, txn_keys: list[dict], *, force: bool = False) -> int:
+    """Enqueue categorization jobs for transactions. Returns the message count.
 
     ``txn_keys`` is ``[{"date", "txnId"}]`` (the locate keys the categorizer needs to read the
     stored item and form its sort key). A no-op that returns 0 when there is nothing to enqueue
     or the queue URL is unset (logged) — the caller treats any failure as non-fatal.
+
+    ``force`` re-categorizes transactions the pipeline has *already* filed (Slice 6, [B-7]).
+    It has to travel in the message because the skip lives in the categorizer, not here: that
+    consumer ignores any transaction whose status isn't ``uncategorized`` so a redelivered SQS
+    message is a cheap no-op. Owner decisions (``confirmed``/``corrected``) are still never
+    re-run — see the categorizer and ``apply_categorization``'s conditional guard.
     """
     queue_url = os.environ.get("CATEGORIZE_QUEUE_URL")
     if not queue_url:
@@ -47,10 +53,10 @@ def enqueue_categorization(sub: str, txn_keys: list[dict]) -> int:
 
     sent = 0
     for chunk in _chunks(txn_keys, _MAX_KEYS_PER_MESSAGE):
-        _client.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps({"sub": sub, "txnKeys": chunk}),
-        )
+        body: dict = {"sub": sub, "txnKeys": chunk}
+        if force:
+            body["force"] = True  # omitted when false → import messages keep their exact shape
+        _client.send_message(QueueUrl=queue_url, MessageBody=json.dumps(body))
         sent += 1
     return sent
 

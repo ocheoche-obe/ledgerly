@@ -1,7 +1,8 @@
 """Handler tests for /imports and /transactions — routing, auth, parsing, error mapping.
 
-Full request path (handler → adapter → moto S3/DynamoDB): covers presign, status polling,
-the date-window query, and 400/401/404/405 mapping without touching AWS.
+Full request path (handler → adapter → moto S3/DynamoDB/SQS): covers presign, status polling,
+the date-window query, the [B-7] recategorize re-drive, and 400/401/404/405 mapping without
+touching AWS.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from moto import mock_aws
 
 TABLE_NAME = "ledgerly-test"
 BUCKET = "ledgerly-uploads-test"
+QUEUE_NAME = "ledgerly-test-categorize"
 
 
 @pytest.fixture
@@ -39,12 +41,37 @@ def handlers(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=BUCKET)
-        for mod in ("adapters.dynamo", "adapters.s3",
+        sqs = boto3.client("sqs", region_name="us-east-1")
+        monkeypatch.setenv(
+            "CATEGORIZE_QUEUE_URL", sqs.create_queue(QueueName=QUEUE_NAME)["QueueUrl"]
+        )
+        for mod in ("adapters.dynamo", "adapters.s3", "adapters.sqs",
                     "functions.api_imports.handler", "functions.api_transactions.handler"):
             sys.modules.pop(mod, None)
         imports = importlib.import_module("functions.api_imports.handler")
         transactions = importlib.import_module("functions.api_transactions.handler")
         yield imports, transactions
+
+
+def _seed_txn(txn_id, *, date, sub="s1", status="uncategorized"):
+    """Put a transaction straight into the table (the importer's write path is tested
+    elsewhere; here we only need rows for the window query to find)."""
+    dynamo = importlib.import_module("adapters.dynamo")
+    dynamo._table.put_item(Item={
+        "pk": f"USER#{sub}", "sk": f"TXN#{date}#{txn_id}", "type": "TXN",
+        "txnId": txn_id, "date": date, "amountCents": -1234, "direction": "debit",
+        "balanceCents": 100000, "accountId": "chase-5980", "descriptionRaw": "SAFEWAY",
+        "merchantNormalized": "safeway", "categoryId": None, "categoryStatus": status,
+        "needsReview": False, "importId": "01IMP",
+    })
+
+
+def _queued_messages():
+    """Every message currently on the categorization queue, as parsed bodies."""
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    url = sqs.get_queue_url(QueueName=QUEUE_NAME)["QueueUrl"]
+    received = sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10).get("Messages", [])
+    return [json.loads(m["Body"]) for m in received]
 
 
 def _event(method, *, sub="s1", body=None, path_params=None, query=None):
@@ -159,3 +186,101 @@ def test_get_transactions_without_sub_is_401(handlers):
     _, transactions = handlers
     res = transactions.handler(_event("GET", sub=None), None)
     assert res["statusCode"] == 401
+
+
+# --- POST /transactions/recategorize ([B-7]) -------------------------------------------
+
+def test_recategorize_enqueues_uncategorized_rows_only(handlers):
+    _, transactions = handlers
+    _seed_txn("a1", date="2026-07-02")
+    _seed_txn("a2", date="2026-07-03")
+    _seed_txn("a3", date="2026-07-04", status="auto")  # already filed → left alone
+
+    res = transactions.handler(
+        _event("POST", body={"from": "2026-07-01", "to": "2026-07-31"}), None
+    )
+
+    assert res["statusCode"] == 202
+    body = _body(res)
+    assert body["scanned"] == 3
+    assert body["enqueued"] == 2
+    assert body["messages"] == 1
+    assert "truncated" not in body
+
+    (message,) = _queued_messages()
+    assert {k["txnId"] for k in message["txnKeys"]} == {"a1", "a2"}
+    assert "force" not in message  # default scope needs no force flag
+
+
+def test_recategorize_include_categorized_widens_scope_and_sets_force(handlers):
+    _, transactions = handlers
+    _seed_txn("b1", date="2026-07-02")
+    _seed_txn("b2", date="2026-07-03", status="auto")
+    _seed_txn("b3", date="2026-07-04", status="corrected")  # owner decision — never re-run
+
+    res = transactions.handler(
+        _event("POST", body={"from": "2026-07-01", "to": "2026-07-31",
+                             "includeCategorized": True}), None
+    )
+
+    assert res["statusCode"] == 202
+    assert _body(res)["enqueued"] == 2
+    (message,) = _queued_messages()
+    assert {k["txnId"] for k in message["txnKeys"]} == {"b1", "b2"}
+    assert message["force"] is True
+
+
+def test_recategorize_with_nothing_to_do_enqueues_nothing(handlers):
+    _, transactions = handlers
+    _seed_txn("c1", date="2026-07-02", status="confirmed")
+
+    res = transactions.handler(
+        _event("POST", body={"from": "2026-07-01", "to": "2026-07-31"}), None
+    )
+
+    assert _body(res)["enqueued"] == 0
+    assert _body(res)["messages"] == 0
+    assert _queued_messages() == []
+
+
+def test_recategorize_reports_a_truncated_window(handlers, monkeypatch):
+    # The window query is single-page ([B-2]). A bulk backfill that quietly stops at the cap
+    # would leave rows stranded — exactly the bug [B-7] exists to fix — so it must say so.
+    _, transactions = handlers
+    _seed_txn("d1", date="2026-07-02")
+    _seed_txn("d2", date="2026-07-03")
+    monkeypatch.setattr(transactions, "TXN_QUERY_LIMIT", 2)
+
+    res = transactions.handler(
+        _event("POST", body={"from": "2026-07-01", "to": "2026-07-31"}), None
+    )
+
+    body = _body(res)
+    assert body["truncated"] is True
+    assert "narrower windows" in body["message"]
+
+
+def test_recategorize_rejects_bad_window(handlers):
+    _, transactions = handlers
+    res = transactions.handler(
+        _event("POST", body={"from": "2026-07-31", "to": "2026-07-01"}), None
+    )
+    assert res["statusCode"] == 400
+
+
+def test_recategorize_rejects_non_boolean_include_flag(handlers):
+    _, transactions = handlers
+    res = transactions.handler(_event("POST", body={"includeCategorized": "yes"}), None)
+    assert res["statusCode"] == 400
+
+
+def test_recategorize_without_sub_is_401(handlers):
+    _, transactions = handlers
+    res = transactions.handler(_event("POST", sub=None, body={}), None)
+    assert res["statusCode"] == 401
+
+
+def test_transactions_rejects_unsupported_method(handlers):
+    _, transactions = handlers
+    res = transactions.handler(_event("DELETE"), None)
+    assert res["statusCode"] == 405
