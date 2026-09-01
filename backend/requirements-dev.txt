@@ -10,7 +10,7 @@
 pytest>=9.1.1,<9.2
 # Ruff is pre-1.0: minor releases may change the default rule set, which *is* the gate here
 # (ruff.toml selects no explicit rule list). Keep this bound tight and bump deliberately.
-ruff>=0.16.0,<0.17
+ruff>=0.16.5,<0.17
 # moto mocks DynamoDB + S3 in-process so backend/adapters can be tested without real AWS
 # (S3 is the CSV upload bucket added in Slice 4).
 moto[dynamodb,s3]>=5.2.2,<5.3
