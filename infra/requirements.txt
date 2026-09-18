@@ -8,5 +8,5 @@
 # and the template CI actually deploys can be produced by different library versions — a
 # minor release may legitimately change synthesized output. The bound makes a version change
 # arrive as one reviewable Dependabot PR instead of a silent difference between two runs.
-aws-cdk-lib>=2.263.0,<2.264
+aws-cdk-lib>=2.269.0,<2.270
 constructs>=10.8.1,<10.9
