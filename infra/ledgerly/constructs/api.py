@@ -8,11 +8,19 @@ any Lambda runs — architecture §3.5):
   GET/POST  /imports         → imports Lambda (presigned upload + recent imports, FR-2.5)
   GET       /imports/{id}    → imports Lambda (status polling, FR-2.5)
   GET       /transactions    → transactions Lambda (date-window list, FR-2 / AP 6)
+  POST      /transactions/recategorize
+                             → transactions Lambda (re-drive categorization, [B-7] / FR-3)
+  GET       /cycles          → cycles Lambda (cycle picker, AP 15 / FR-5.3)
+  GET       /cycles/{cycleRef}/summary
+                             → cycles Lambda (dashboard read, AP 4+6 / FR-5.1)
+  PUT       /cycles/{cycleRef}/budgets/{categoryId}
+                             → cycles Lambda (set/clear a budget, AP 5 / FR-4.3)
 
 Each Lambda gets least privilege: read/write on the one table only — nothing else, no `*`
 resources (NFR-4.4). The imports Lambda additionally gets `s3:PutObject` on the upload bucket
-so the presigned URLs it mints are usable. Business identity is read from the verified JWT
-claims inside each handler (FR-1.3).
+so the presigned URLs it mints are usable, and the transactions Lambda `sqs:SendMessage` on the
+categorization queue (send only — consuming is the categorizer's job). Business identity is read
+from the verified JWT claims inside each handler (FR-1.3).
 """
 
 from aws_cdk import Duration, RemovalPolicy
@@ -24,6 +32,7 @@ from aws_cdk import aws_dynamodb as ddb
 from aws_cdk import aws_lambda as _lambda
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
 from ledgerly.backend_asset import backend_code
@@ -46,6 +55,7 @@ class ApiConstruct(Construct):
         stage: StageConfig,
         table: ddb.ITable,
         upload_bucket: s3.IBucket,
+        categorize_queue: sqs.IQueue,
         user_pool: cognito.IUserPool,
         user_pool_client: cognito.IUserPoolClient,
         allowed_origins: list[str],
@@ -72,6 +82,17 @@ class ApiConstruct(Construct):
             table=table,
             function_name=f"ledgerly-{stage.name}-api-transactions",
             handler="functions.api_transactions.handler.handler",
+            extra_env={"CATEGORIZE_QUEUE_URL": categorize_queue.queue_url},
+        )
+        # POST /transactions/recategorize re-drives the categorizer ([B-7]) by enqueueing
+        # locate keys — send only; the categorizer alone consumes.
+        categorize_queue.grant_send_messages(transactions_fn)
+        cycles_fn = self._api_lambda(
+            "CyclesFn",
+            stage=stage,
+            table=table,
+            function_name=f"ledgerly-{stage.name}-api-cycles",
+            handler="functions.api_cycles.handler.handler",
         )
         imports_fn = self._api_lambda(
             "ImportsFn",
@@ -101,6 +122,7 @@ class ApiConstruct(Construct):
                     apigwv2.CorsHttpMethod.GET,
                     apigwv2.CorsHttpMethod.POST,
                     apigwv2.CorsHttpMethod.PATCH,
+                    apigwv2.CorsHttpMethod.PUT,
                     apigwv2.CorsHttpMethod.OPTIONS,
                 ],
                 allow_headers=["authorization", "content-type"],
@@ -144,6 +166,32 @@ class ApiConstruct(Construct):
             methods=[apigwv2.HttpMethod.GET],
             integration=integrations.HttpLambdaIntegration(
                 "TransactionsIntegration", transactions_fn
+            ),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/cycles",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration("CyclesIntegration", cycles_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/cycles/{cycleRef}/summary",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=integrations.HttpLambdaIntegration("CycleSummaryIntegration", cycles_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/cycles/{cycleRef}/budgets/{categoryId}",
+            methods=[apigwv2.HttpMethod.PUT],
+            integration=integrations.HttpLambdaIntegration("CycleBudgetIntegration", cycles_fn),
+            authorizer=authorizer,
+        )
+        self.http_api.add_routes(
+            path="/transactions/recategorize",
+            methods=[apigwv2.HttpMethod.POST],
+            integration=integrations.HttpLambdaIntegration(
+                "TransactionsRecategorizeIntegration", transactions_fn
             ),
             authorizer=authorizer,
         )

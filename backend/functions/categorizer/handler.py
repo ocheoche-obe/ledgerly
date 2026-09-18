@@ -5,7 +5,9 @@ batch of locate keys ``{sub, txnKeys: [{date, txnId}]}``; per message:
 
   1. load the owner's active categories (the valid target set)
   2. read each transaction; process only the still-``uncategorized`` ones (a replay of an
-     already-categorized batch is a cheap no-op — idempotency, NFR-3.2)
+     already-categorized batch is a cheap no-op — idempotency, NFR-3.2). A message carrying
+     ``force`` (the recategorize endpoint's opt-in, Slice 6) also re-runs already-filed
+     transactions — but never the owner's own ``confirmed``/``corrected`` ones.
   3. **merchant rules first** — an exact ``RULE#<merchant>`` hit skips the LLM (free, FR-3.4).
      Empty this slice (rules land in Slice 7), so everything falls through to:
   4. **the LLM** — one batched Bedrock call (Claude Opus 4.8) returns ``{categoryId?, confidence}``
@@ -36,7 +38,7 @@ from core.categorize import (
     decide_rule_hit,
 )
 from core.merchant_rules import rule_category
-from core.transactions import STATUS_UNCATEGORIZED
+from core.transactions import OWNER_SET_STATUSES, STATUS_UNCATEGORIZED
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -67,10 +69,25 @@ def handler(event: dict, context) -> dict:
     return {"batchItemFailures": failures}
 
 
+def _should_process(txn: dict, *, force: bool) -> bool:
+    """Whether this transaction should be (re)categorized.
+
+    Normally only ``uncategorized`` ones — anything else is a replay of work already done.
+    Under ``force`` (recategorize, [B-7]) an already-filed ``auto`` transaction is re-run too,
+    but a ``confirmed``/``corrected`` one never is: ``apply_categorization`` would refuse the
+    write anyway, so including them would only burn Bedrock tokens to produce a discarded answer.
+    """
+    status = txn.get("categoryStatus")
+    if force:
+        return status not in OWNER_SET_STATUSES
+    return status == STATUS_UNCATEGORIZED
+
+
 def _process_message(body: str) -> None:
     msg = json.loads(body)
     sub = msg["sub"]
     txn_keys = msg.get("txnKeys", [])
+    force = bool(msg.get("force"))
     if not txn_keys:
         return
 
@@ -83,8 +100,7 @@ def _process_message(body: str) -> None:
 
     for key in txn_keys:
         txn = get_transaction(sub, key["date"], key["txnId"])
-        if txn is None or txn.get("categoryStatus") != STATUS_UNCATEGORIZED:
-            # Missing (shouldn't happen) or already handled (auto/confirmed/corrected) → skip.
+        if txn is None or not _should_process(txn, force=force):
             continue
 
         category_id = rule_category(get_rule(sub, txn.get("merchantNormalized", "")))
@@ -111,6 +127,6 @@ def _process_message(body: str) -> None:
                 llm_auto += 1
 
     logger.info(json.dumps({
-        "stage": "categorizer", "sub_txns": len(txn_keys),
+        "stage": "categorizer", "sub_txns": len(txn_keys), "force": force,
         "rule_hits": rule_hits, "llm_auto": llm_auto, "needs_review": needs_review,
     }))

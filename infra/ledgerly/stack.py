@@ -59,6 +59,7 @@ class LedgerlyStack(Stack):
             stage=stage,
             table=data.table,
             upload_bucket=ingest.bucket,
+            categorize_queue=categorization.queue,
             user_pool=auth.user_pool,
             user_pool_client=auth.user_pool_client,
             allowed_origins=allowed_origins,

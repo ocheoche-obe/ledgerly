@@ -75,6 +75,60 @@ export interface Transaction {
   importId: string;
 }
 
+// --- budgets & dashboard (Slice 6, FR-4.3 / FR-5) --------------------------------------
+
+// One dashboard row. `budgetCents` is null when no target was set — distinct from a $0 target.
+// `spentCents` is money *out* (a negated net, so refunds reduce it); an income category reports
+// negative spend. `categoryId` is the synthetic "__uncategorized__" on the uncategorized row.
+export interface CategorySummary {
+  categoryId: string;
+  name: string;
+  budgetCents: number | null;
+  spentCents: number;
+  netCents: number;
+  transactionCount: number;
+  remainingCents: number | null;
+  over: boolean;
+  archived: boolean;
+}
+
+export interface CycleTotals {
+  moneyInCents: number;
+  moneyOutCents: number;
+  netCents: number;
+  budgetedCents: number;
+  spentAgainstBudgetCents: number;
+  remainingCents: number;
+  transactionCount: number;
+  uncategorizedCount: number;
+  truncated?: boolean;
+}
+
+export interface CycleSummary {
+  cycle: Cycle;
+  perCategory: CategorySummary[];
+  totals: CycleTotals;
+}
+
+export const UNCATEGORIZED_ROW_ID = "__uncategorized__";
+
+// A cycle is addressed in the API by `current` or any ISO date inside it — never by the raw
+// cycle ID, whose '#' would have to survive URL encoding. The server derives the canonical ID.
+export type CycleRef = "current" | string;
+
+// POST /transactions/recategorize — the async re-drive ([B-7]). Returns what was *enqueued*,
+// not what was categorized: the categorizer runs behind SQS, so the list refreshes seconds later.
+export interface RecategorizeResult {
+  from: string;
+  to: string;
+  includeCategorized: boolean;
+  scanned: number;
+  enqueued: number;
+  messages: number;
+  truncated?: boolean;
+  message?: string;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -175,6 +229,31 @@ export function makeApi(apiUrl: string, token: string) {
         `/transactions${suffix}`,
       );
     },
+
+    // Cycles available to the picker (FR-5.3), newest first — bounded by the owner's first
+    // transaction, so it never offers cycles that predate any data.
+    listCycles: () =>
+      request<{ cycles: Cycle[]; currentCycleId: string }>("/cycles"),
+
+    // The dashboard read (FR-5.1): budgets + actuals for one cycle, aggregated server-side.
+    getCycleSummary: (ref: CycleRef = "current") =>
+      request<CycleSummary>(`/cycles/${encodeURIComponent(ref)}/summary`),
+
+    // Set a category's budget for one cycle (FR-4.3); null clears it, because "no budget" is
+    // the absence of a target rather than a target of zero.
+    setBudget: (ref: CycleRef, categoryId: string, amountCents: number | null) =>
+      request<{ cycle: Cycle; budget: { amountCents: number } | null }>(
+        `/cycles/${encodeURIComponent(ref)}/budgets/${encodeURIComponent(categoryId)}`,
+        { method: "PUT", body: JSON.stringify({ amountCents }) },
+      ),
+
+    // Re-drive categorization over a window ([B-7]). Default scope is uncategorized rows only;
+    // includeCategorized also re-runs ones the pipeline already filed (never owner decisions).
+    recategorize: (from: string, to: string, includeCategorized = false) =>
+      request<RecategorizeResult>("/transactions/recategorize", {
+        method: "POST",
+        body: JSON.stringify({ from, to, includeCategorized }),
+      }),
   };
 }
 

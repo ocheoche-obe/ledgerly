@@ -145,13 +145,20 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   seam, ADR-008) + §3.2 decision matrix (`decide_llm`: threshold → auto vs kept-guess-with-review;
   null/invalid id → uncategorized, nothing mis-filed) + prompt/forced-tool contract.
   `merchant_rules.py`: `RULE#<merchant>` read seam (FR-3.4; read-only until Slice 7).
+  `budgets.py` (Slice 6): budget item shape/validation + **the whole dashboard aggregation**
+  (`summarize` — per-category rows + totals, AWS-free so the arithmetic the owner trusts is
+  unit-testable; spend = negated net so refunds net down, synthetic Uncategorized row, `remaining`
+  counts only budgeted categories). `cycles.py` also gained `previous_cycle`/`recent_cycles`
+  (the FR-5.3 picker, AP 15).
 - **`backend/adapters/`** — AWS-facing persistence (boto3). `dynamo.py`:
   `get_or_create_settings` (AP #1), `update_cadence` (FR-4.2), `list/create/update_category`
   (AP #2/#3), Slice-4: `create/get/list_imports` + `set_import_status` (AP 11),
   `claim_file` (AP 12, file idempotency — recognizes its own replay), `put_transaction`
   (AP 7, row idempotency), `query_transactions` (AP 6), plus Slice-5: `list_category_choices`,
   `get_rule` (AP 13), `get_transaction`, `apply_categorization` (AP 10, correction-preserving
-  update + GSI1/GSI2 maintenance). `s3.py`: presigned PUT URL + `<sub>/<importId>` key
+  update + GSI1/GSI2 maintenance), plus Slice-6: `list_budgets` (AP 4), `put_budget`/
+  `delete_budget` (AP 5 — clearing *deletes*, since "no target" is the item's absence),
+  `first_transaction_date` (AP 15's lower bound). `s3.py`: presigned PUT URL + `<sub>/<importId>` key
   round-trip. `bedrock.py`: `BedrockCategorizer` via **boto3 `invoke_model`** (not the
   `anthropic` SDK — zero runtime deps), inference-profile `us.anthropic.claude-sonnet-4-6`
   (INFERENCE_PROFILE-only; Opus 4.8 was the original choice but this account cannot invoke it —
@@ -160,7 +167,13 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
 - **`backend/functions/`** — thin handlers, identity from verified JWT claims only (FR-1.3):
   `api_settings` (`GET`/`PATCH /settings`, live cycle), `api_categories` (`GET`/`POST
   /categories` + `PATCH /categories/{id}`), `api_imports` (`POST /imports` presign +
-  `GET /imports[/{id}]` polling), `api_transactions` (`GET /transactions?from&to`), the
+  `GET /imports[/{id}]` polling), `api_transactions` (`GET /transactions?from&to` +
+  **`POST /transactions/recategorize`** — the [B-7] re-drive; uncategorized-only by default,
+  `includeCategorized` → a `force` flag the *categorizer* honours, because its own replay-skip
+  would otherwise ignore re-runs), `api_cycles` (`GET /cycles` picker,
+  `GET /cycles/{cycleRef}/summary`, `PUT /cycles/{cycleRef}/budgets/{categoryId}` — **`cycleRef`
+  is `current` or an ISO date *inside* the cycle, never the raw `M#…` ID**, whose `#` would have
+  to survive URL encoding; the server derives the canonical ID), the
   **S3-triggered `importer`** (parse → file/row idempotent puts → import summary → enqueue added
   rows; no-op on redelivered terminal imports), and the **SQS-triggered `categorizer`**
   (rule-first → batched Bedrock → correction-preserving updates; partial-batch-failure → DLQ).
@@ -170,9 +183,9 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   Hosted-UI/PKCE client + owner user), `Ingest` (private SSE-S3 upload bucket: TLS-only,
   30-day object expiry, CORS scoped to the SPA origin[s]; import Lambda; S3→Lambda
   notification on `.csv`), `Api` (HTTP API + JWT authorizer + settings/categories/imports/
-  transactions Lambdas via a shared `_api_lambda` helper, each table-scoped least-privilege;
-  imports Lambda also gets `s3:PutObject` on the bucket; importer also gets `sqs:SendMessage`
-  on the categorization queue), `Categorization` (SQS queue + DLQ maxReceive 3 + DLQ-depth
+  transactions/**cycles** Lambdas via a shared `_api_lambda` helper, each table-scoped
+  least-privilege; imports Lambda also gets `s3:PutObject` on the bucket; importer **and the
+  transactions Lambda** get `sqs:SendMessage` on the categorization queue), `Categorization` (SQS queue + DLQ maxReceive 3 + DLQ-depth
   alarm + categorizer Lambda + Bedrock `InvokeModel` IAM scoped to the one model's profile +
   foundation-model ARNs, ADR-008/009), `Web` (private S3 + CloudFront + runtime `config.json`),
   `Ops` (AWS Budgets billing alarm). Separately, `LedgerlyCicdStack` (`Ledgerly-cicd`,
@@ -184,7 +197,11 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
 - **`frontend/` (React+Vite+TS)** — Hosted-UI PKCE login, fetches runtime `/config.json`.
   `api.ts` = typed client (bearer token on every call) + `accountLabelFromFilename`/
   `formatCents` helpers. `SettingsPanel` = cadence + current cycle; `CategoriesPanel` =
-  category CRUD; `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
+  category CRUD; **`DashboardPanel`** (Slice 6, leads the app) = budget vs. actual per category
+  for a cycle + totals band + cycle picker + inline budget editing, styled via
+  `dashboardStyles.ts` — a **real stylesheet**, not inline styles, because the layout needs media
+  queries (FR-5.4) and `:hover`/`:focus`; the other panels keep inline styles until [B-3];
+  `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
   recent imports; `TransactionsPanel` = date-window transaction table with a **Category** column that reflects
   the async pipeline (reads Uncategorized until the categorizer runs, then the category name +
   a "review" tag on low confidence, Slice 5); `styles.ts` = shared inline styles.
@@ -255,8 +272,38 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 5 — AI categorization pipeline + eval harness: ✅ COMPLETE (2026-08-03). Next: Slice 6 —
-budgets & at-a-glance dashboard, starting with [B-7] (see below). Start it with `/start-slice`.**
+**Slice 6 — budgets & at-a-glance dashboard: 🔨 CODE-COMPLETE (2026-08-07), PR open, NOT yet
+verified live. Slice 5 ✅ complete (2026-08-03).**
+
+⛔ **Slice 6 is not done.** Its exit criteria are live ones and a green deploy is not evidence
+(the Slice-5 lesson, below). Outstanding against the **deployed dev stack**:
+
+1. **Run `POST /transactions/recategorize` over 2026-06-01 → 2026-07-31** (the "Recategorize this
+   window" button on the Transactions panel) and confirm the **153 stranded transactions**
+   actually categorize. Until that runs, [B-7] is built but the data is still stranded.
+2. Answer "where is my money going, am I over anywhere?" from the deployed dashboard; set budget
+   amounts for `M#2026-06`/`M#2026-07` (owner input — there are **no budgets in the table at all**).
+3. Check the phone layout, and the past-cycle picker (June/July are where the real data is —
+   **the current cycle is nearly empty**, so the picker is how you see anything).
+
+**What landed:** [B-7] recategorize endpoint · budgets per category per cycle (AP 4/5) ·
+`GET /cycles/{cycleRef}/summary` aggregation (AP 4+6) · `GET /cycles` picker (AP 15) · the
+dashboard with a real design pass · [B-6] infra pins. 216 backend + 19 frontend tests; architecture
+→ v1.6. No new ADR (design covered by §2.2/§2.4/§3.3; two §2.5 route-shape notes instead).
+
+**Two things worth knowing before touching this code:**
+- **`cycleRef` is `current` or an ISO date inside the cycle — never the raw `M#2026-07` ID.** The
+  `#` would have to survive URL encoding, and a mis-encoded ID would silently address a
+  nonexistent cycle whose budgets would persist unread. The server derives the canonical ID.
+- **`includeCategorized` is a `force` flag *in the SQS message*, not a filter at the enqueue
+  site.** The categorizer independently skips anything not `uncategorized` (that skip is what
+  makes redelivery free), so filtering at enqueue would have been silently undone by the consumer.
+
+**Dev data as of 2026-08-07:** 153 real uncategorized txns (`chase-5980`: 59 June, 94 July) · 8
+categorized synthetic (`slice5-smoke-checking`, Aug 1–2) · 15 categories · **0 budgets**. The
+profile cadence was reverted to monthly-only (a stray biweekly entry from a Slice-3 smoke test was
+removed by direct item edit; prior value `[{monthly, 2026-07-01}, {biweekly, anchor 2026-07-24,
+from 2026-08-01}]`).
 
 Slice 5 shipped 2026-07-21 (#25) and was **broken on arrival for 12 days**: every categorizer
 invocation failed with `AccessDeniedException` on Opus 4.8. Root cause was **account-tier
@@ -276,17 +323,12 @@ Walgreens. ⚠ Walgreens scored *exactly* 0.80 and auto-filed, so the threshold 
 verified by an unforced real failure (3 retries 360s apart → DLQ → alarm, everything left
 Uncategorized): FR-3.5's "un-filed, never mis-filed" promise proven on real infrastructure.
 
-**Carry into Slice 6:** **[B-7] is the first task, owner-approved** — build
-`POST /transactions/recategorize` (a date-window re-enqueue) and run it over the 153 real
-transactions stranded uncategorized since Slice 4 (the importer only enqueues newly-added rows;
-ADR-012 idempotency means a re-import adds 0). Do it *before* the dashboard, or the product's core
-screen demos at $0 across every category. Chosen as an endpoint rather than a one-off script
-because Slice 7's review queue needs the same capability. Eval baseline stays deferred (**[B-8]**);
-the 0.8 threshold remains unvalidated beyond the 8-row smoke set. The only categorized data in dev
-today is those 8 synthetic `slice5-smoke-checking` rows, kept deliberately so Slice 6 has
-something realistic to build against until B-7 lands.
+**Still open from Slice 5:** the eval baseline stays deferred (**[B-8]**), so the **0.8 confidence
+threshold remains unvalidated** beyond the 8-row smoke set — note that when Slice 7 sizes the
+review queue, along with the ⚠ above (the comparison is inclusive, so 0.80 exactly auto-files).
+[B-7]'s endpoint was built in Slice 6; running it live is what finally un-strands the 153 rows.
 
-- Last completed (code): Slice 5 — `core/categorize/` (Categorizer interface + §3.2 decision
+- Last completed: Slice 5 — `core/categorize/` (Categorizer interface + §3.2 decision
   matrix + prompt/forced-tool contract), `core/merchant_rules.py` (RULE# read seam),
   `adapters/bedrock.py` (BedrockCategorizer via **boto3 `invoke_model`**, not the `anthropic`
   SDK — zero runtime deps) + `adapters/sqs.py` (best-effort enqueue) + `dynamo.py`

@@ -1,4 +1,12 @@
 # AWS CDK (Python) — infra dependencies for the Ledgerly app.
 # CLI is installed separately (npm i -g aws-cdk); these are the construct libraries.
-aws-cdk-lib>=2.262.2,<3.0.0
-constructs>=10.8.0,<11.0.0
+#
+# Bounded to a *compatible minor*, matching backend/requirements-dev.txt ([B-6], Slice 6).
+# The stakes are higher here than for a linter: aws-cdk-lib **generates the CloudFormation
+# templates we deploy**. With an unbounded minor there is no lockfile and CI resolves the
+# newest matching release on every run, so the `cdk diff` reviewed locally (ADR-004's habit)
+# and the template CI actually deploys can be produced by different library versions — a
+# minor release may legitimately change synthesized output. The bound makes a version change
+# arrive as one reviewable Dependabot PR instead of a silent difference between two runs.
+aws-cdk-lib>=2.263.0,<2.264
+constructs>=10.8.1,<10.9
