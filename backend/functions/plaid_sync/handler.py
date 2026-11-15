@@ -11,7 +11,9 @@ Flow:
      data changed mid-pagination, restart from the cursor this sync began with
   3. plan the buffered added / modified / removed, then apply them — posted rows that replace
      a pending row first, removals last
-  4. save the new cursor (and the accounts' cached balances) — only after every write landed
+  4. save the new cursor (and the accounts' cached balances) — only after every write landed,
+     and only if every row could be read (a row that could not be is retried by the next sync
+     rather than skipped for good)
   5. import → complete with counts; enqueue the new rows for categorization (best-effort)
 
 **Why the cursor is saved last, and not in one transaction with the writes.** A first sync can
@@ -19,6 +21,11 @@ write hundreds of rows, more than a DynamoDB transaction holds. Instead every wr
 idempotent (conditional insert, compare-then-update, delete-if-present), so if this Lambda
 dies before step 4 the next sync replays the same updates from the old cursor and converges
 on the same state. Saving the cursor *early* is the one ordering that loses data.
+
+**When the worker never reports.** A handled failure marks the import ``failed`` here. A
+timeout or crash cannot, so Lambda retries once and, if that also dies, sends the original
+event to the ``on_failure`` handler in this package, which marks the import failed instead of
+leaving it "parsing" forever.
 
 The access token is read, passed to the Plaid adapter, and never logged, stored in the table,
 or put in the import record.
@@ -173,23 +180,34 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
             else:
                 skipped += 1
 
+    # A row that could not be read must not be left behind: Plaid never re-sends what lies
+    # before the cursor. So when any row failed, the cursor stays where this sync started and
+    # the next sync replays the same updates - every write above is idempotent, so the good
+    # rows are no-ops and only the failed ones are attempted again. The balances are still
+    # refreshed (same cursor in, same cursor out).
     cursor_saved = save_plaid_sync_state(
         sub, item_id,
         previous_cursor=start_cursor,
-        cursor=updates.next_cursor,
+        cursor=start_cursor if errors else updates.next_cursor,
         accounts=accounts,
         synced_at=datetime.now(UTC).isoformat(),
     )
+    failed = len(errors)
+    cursor_held = failed > 0
+    if cursor_held:
+        errors.append({"error": f"{failed} transaction(s) could not be read; "
+                                "the next sync will try them again"})
 
     counts = {
         "added": added, "modified": modified + merged, "removed": removed,
-        "duplicate": skipped, "failed": len(errors),
+        "duplicate": skipped, "failed": failed,
     }
     set_import_status(sub, import_id, STATUS_COMPLETE, errors=errors, **counts)
     logger.info(json.dumps({
         "stage": "plaid_sync", "importId": import_id, "itemId": item_id, "outcome": "complete",
         **counts, "merged": merged, "pendingAdded": pending_added,
         "pages": updates.pages, "restarts": updates.restarts, "cursorSaved": cursor_saved,
+        "cursorHeld": cursor_held,
         "plaidRequestIds": updates.request_ids[-3:],  # safe to log; Plaid support needs them
     }))
 

@@ -1,12 +1,15 @@
 """PlaidConstruct — Plaid Sandbox ingest (Slice 9, ADR-014). Instantiated for `dev` only.
 
 Owns everything Plaid-specific so that a stage without Plaid (prod) synthesizes with none of
-it: two Lambdas and Ledgerly's first two runtime secrets.
+it: three Lambdas and Ledgerly's first two runtime secrets.
 
 - **`api_fn`** — `POST /plaid/link-token`, `/plaid/exchange`, `/plaid/sync` (routes are wired
   by `ApiConstruct`, behind the same JWT authorizer as everything else).
 - **`sync_fn`** — the worker that pages `/transactions/sync` and writes transactions. Invoked
   asynchronously by `api_fn`, so a slow first sync is not bound by API Gateway's 30 seconds.
+
+- **`sync_failed_fn`** — the worker's on-failure destination: marks an import `failed` when
+  the worker timed out or crashed on both attempts and so could not report it itself.
 
 **Secrets (NFR-4.3/4.5).** Lambdas receive secret *names* in their environment, never values.
 
@@ -17,12 +20,15 @@ it: two Lambdas and Ledgerly's first two runtime secrets.
 - *Plaid access tokens* — created here, empty, and written at runtime by `api_fn` alone.
 
 Least privilege (NFR-4.4): the worker can read both secrets and write neither; only `api_fn`
-can write the token secret; nothing else in the stack can read either.
+can write the token secret, and only with `PutSecretValue`; `sync_failed_fn` has table access
+and no secret access; nothing else in the stack can read either secret.
 """
 
 from aws_cdk import Duration, RemovalPolicy, SecretValue
 from aws_cdk import aws_dynamodb as ddb
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as _lambda
+from aws_cdk import aws_lambda_destinations as destinations
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_secretsmanager as secretsmanager
 from aws_cdk import aws_sqs as sqs
@@ -87,6 +93,21 @@ class PlaidConstruct(Construct):
             "PLAID_TOKENS_SECRET_ID": tokens_secret.secret_name,
         }
 
+        # Table access only, and no Plaid or secret configuration at all.
+        self.sync_failed_fn = _lambda.Function(
+            self,
+            "SyncFailedFn",
+            function_name=f"ledgerly-{stage.name}-plaid-sync-failed",
+            runtime=_lambda.Runtime.PYTHON_3_13,
+            handler="functions.plaid_sync.on_failure.handler",
+            code=backend_code(),
+            timeout=Duration.seconds(10),
+            memory_size=256,
+            environment={"TABLE_NAME": table.table_name, "LOG_LEVEL": "INFO"},
+            log_group=self._log_group("SyncFailedLogs", stage),
+        )
+        table.grant_read_write_data(self.sync_failed_fn)
+
         self.sync_fn = _lambda.Function(
             self,
             "SyncFn",
@@ -104,8 +125,12 @@ class PlaidConstruct(Construct):
         )
         # A sync is idempotent, so one automatic retry after a crash or timeout is safe — and
         # is what finishes a run that died between its writes and saving the cursor.
+        # If the retry dies too, the import must not be left "parsing" forever: the original
+        # event goes to `sync_failed_fn`, which marks it failed.
         self.sync_fn.configure_async_invoke(
-            retry_attempts=1, max_event_age=Duration.minutes(15)
+            retry_attempts=1,
+            max_event_age=Duration.minutes(15),
+            on_failure=destinations.LambdaDestination(self.sync_failed_fn),
         )
         table.grant_read_write_data(self.sync_fn)
         categorize_queue.grant_send_messages(self.sync_fn)
@@ -133,7 +158,12 @@ class PlaidConstruct(Construct):
         table.grant_read_write_data(self.api_fn)
         keys_secret.grant_read(self.api_fn)
         tokens_secret.grant_read(self.api_fn)
-        tokens_secret.grant_write(self.api_fn)
+        # Not `grant_write`: that also allows UpdateSecret (which can change the secret's KMS
+        # key and description) and UpdateSecretVersionStage. Storing a token is one call.
+        self.api_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["secretsmanager:PutSecretValue"],
+            resources=[tokens_secret.secret_arn],
+        ))
         self.sync_fn.grant_invoke(self.api_fn)
 
     def _log_group(self, construct_id: str, stage: StageConfig) -> logs.LogGroup:

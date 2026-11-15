@@ -286,8 +286,11 @@ from the starting cursor on `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION`; plan
 posted-before-removed), `core/plaid_items.py`, `adapters/plaid.py` (stdlib `urllib`, Sandbox host
 only, keys in headers), `adapters/secrets.py`, `adapters/lambda_invoke.py`, Plaid writes in
 `adapters/dynamo.py` (row + `PLAIDTXN#` pointer always in one transaction), `functions/api_plaid`,
-`functions/plaid_sync`, `PlaidConstruct`. `summarize` reports `pendingSpentCents`. 298 backend
-tests. **Outstanding:** owner creates the API-keys secret · deploy · run one Sandbox sync with
+`functions/plaid_sync`, `PlaidConstruct`. `summarize` reports `pendingSpentCents`. Review fixes (2026-11-15): `apply_categorization`
+requires the row to still exist; the connection record is written right after the token and the
+exchange is never retried; cancelled DynamoDB transactions are only "already exists" on a real
+condition failure; a `plaid-sync-failed` on-failure Lambda; CI asserts prod has no Plaid
+resources (`infra/check_prod_has_no_plaid.py`). 314 backend tests. **Outstanding:** owner creates the API-keys secret · deploy · run one Sandbox sync with
 `user_transactions_dynamic` (the `sandbox_link` / `sandbox_refresh` direct-invoke actions on
 `ledgerly-dev-api-plaid` exist for this) · SPA "Bank connection" panel · `/item/remove` ·
 architecture §1.2/§1.3/§2.4/§2.5 prose. `PLAID_PLAN.md` is the Plaid build-kit state file.

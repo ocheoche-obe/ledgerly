@@ -133,6 +133,16 @@ def test_transient_errors_are_retried_then_succeed():
     assert len(transport.requests) == 3
 
 
+def test_the_exchange_is_sent_once_even_when_the_failure_looks_transient():
+    # A public token is single-use: a retry after a lost response would be refused.
+    for failure in (urllib.error.URLError("reset"),
+                    plaid_error("INTERNAL_SERVER_ERROR", "API_ERROR", 500)):
+        client, transport = make_client(failure, (200, {"access_token": ACCESS_TOKEN}))
+        with pytest.raises(PlaidError):
+            client.item_public_token_exchange(public_token="public-sandbox-x")
+        assert len(transport.requests) == 1
+
+
 def test_permanent_errors_are_not_retried():
     client, transport = make_client(plaid_error("ITEM_LOGIN_REQUIRED", "ITEM_ERROR"))
     with pytest.raises(PlaidError):

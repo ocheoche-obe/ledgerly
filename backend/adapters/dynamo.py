@@ -7,6 +7,7 @@ every item is `pk = USER#<sub>`; settings live at `sk = PROFILE`.
 from __future__ import annotations
 
 import os
+import time
 from datetime import date
 from decimal import Decimal
 
@@ -26,7 +27,13 @@ from core.categories import (
 )
 from core.categorize import Decision
 from core.cycles import plan_cadence_change, today_utc
-from core.imports import import_view, new_import, new_sync_import
+from core.imports import (
+    STATUS_FAILED,
+    TERMINAL_STATUSES,
+    import_view,
+    new_import,
+    new_sync_import,
+)
 from core.merchant_rules import rule_sk
 from core.plaid_items import plaid_item_sk, plaid_txn_pointer_sk
 from core.plaid_normalize import SOURCE_FIELDS
@@ -274,6 +281,34 @@ def set_import_status(
     )
 
 
+def fail_unfinished_import(sub: str, import_id: str, message: str) -> bool:
+    """Mark an import ``failed`` unless it already reached a terminal status.
+
+    For the case where the worker never got to report its own outcome (it timed out or
+    crashed on every attempt). True if the import was marked; False if it had already
+    finished or does not exist - a finished import is never overwritten.
+    """
+    names = {"#status": "status"}
+    values: dict[str, object] = {":failed": STATUS_FAILED, ":errors": [{"error": message}]}
+    not_terminal = []
+    for i, status in enumerate(TERMINAL_STATUSES):
+        values[f":t{i}"] = status
+        not_terminal.append(f"#status <> :t{i}")
+    try:
+        _table.update_item(
+            Key={"pk": _pk(sub), "sk": _import_sk(import_id)},
+            UpdateExpression="SET #status = :failed, errors = :errors",
+            ConditionExpression="attribute_exists(sk) AND " + " AND ".join(not_terminal),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except ClientError as err:
+        if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
 def claim_file(sub: str, file_hash: str, import_id: str) -> bool:
     """AP 12 — file-level idempotency (FR-2.2). True if this import may proceed; False if
     the exact file was already imported under a *different* import.
@@ -388,6 +423,13 @@ def apply_categorization(sub: str, date_str: str, txn_id: str, decision: Decisio
     the write when the owner has already ``confirmed``/``corrected`` the txn, so a message
     replay (SQS at-least-once) can never clobber a human decision. Returns True if applied,
     False if the guard skipped it.
+
+    The row must also **still exist**. A Plaid sync can delete a row (removed), move it (its
+    date changed) or replace it (a pending charge posted) between the categorizer reading it
+    and writing here. Without the existence check ``update_item`` would *create* an item at the
+    old key holding only the category fields - a transaction with no ID, date or amount, which
+    breaks every reader of that cycle. Returns False in that case too; the sync re-enqueues
+    the row under its new key when it is still uncategorized.
     """
     sets: dict[str, object] = {
         "categoryId": decision.category_id,  # None → stored as NULL (uncategorized)
@@ -427,7 +469,10 @@ def apply_categorization(sub: str, date_str: str, txn_id: str, decision: Decisio
     names["#cs"] = "categoryStatus"
     values[":confirmed"] = OWNER_SET_STATUSES[0]
     values[":corrected"] = OWNER_SET_STATUSES[1]
-    condition = "attribute_not_exists(#cs) OR (#cs <> :confirmed AND #cs <> :corrected)"
+    condition = (
+        "attribute_exists(sk) AND "
+        "(attribute_not_exists(#cs) OR (#cs <> :confirmed AND #cs <> :corrected))"
+    )
 
     try:
         _table.update_item(
@@ -440,7 +485,7 @@ def apply_categorization(sub: str, date_str: str, txn_id: str, decision: Decisio
         return True
     except ClientError as err:
         if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            return False  # owner already decided — preserve it
+            return False  # owner already decided, or the row is gone — nothing to write
         raise
 
 
@@ -534,6 +579,25 @@ def put_plaid_item(sub: str, item_body: dict) -> bool:
         raise
 
 
+def set_plaid_item_accounts(
+    sub: str, item_id: str, *, accounts: list[dict], institution_id: str,
+    institution_name: str,
+) -> None:
+    """Fill in a linked Item's accounts (and its institution, where not already recorded).
+
+    The record is written the moment the exchange succeeds, before the account list has been
+    fetched; this completes it. The cursor is never touched here.
+    """
+    _table.update_item(
+        Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
+        UpdateExpression="SET accounts = :accounts, institutionId = :iid, institutionName = :iname",
+        ConditionExpression="attribute_exists(sk)",
+        ExpressionAttributeValues={
+            ":accounts": accounts, ":iid": institution_id, ":iname": institution_name,
+        },
+    )
+
+
 def get_plaid_item(sub: str, item_id: str) -> dict | None:
     """The stored Item record (raw, including the sync cursor), or None."""
     return _table.get_item(Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)}).get("Item")
@@ -615,8 +679,49 @@ def _delete(sub: str, sk: str) -> dict:
     return {"Delete": {"TableName": _TABLE_NAME, "Key": {"pk": _pk(sub), "sk": sk}}}
 
 
-def _is_cancelled(err: ClientError) -> bool:
-    return err.response["Error"]["Code"] == "TransactionCanceledException"
+# Why a transaction was cancelled matters: only a failed *condition* means "that row is
+# already there". A conflict with another writer or a throttle means "nothing was written,
+# try again" - reading those as "already exists" would silently skip a row.
+_CONDITION_FAILED = "ConditionalCheckFailed"
+_TRANSIENT_REASONS = frozenset({
+    "TransactionConflict", "ThrottlingError", "ProvisionedThroughputExceeded",
+})
+_TRANSACT_ATTEMPTS = 4
+
+
+def _cancellation_codes(err: ClientError) -> list[str] | None:
+    """Per-item reason codes of a cancelled transaction (``"None"`` for an item that was
+    fine), or None when ``err`` is not a cancellation at all."""
+    if err.response.get("Error", {}).get("Code") != "TransactionCanceledException":
+        return None
+    reasons = err.response.get("CancellationReasons") or []
+    return [str((reason or {}).get("Code") or "None") for reason in reasons]
+
+
+def _transact(items: list[dict]) -> bool:
+    """Run a write transaction whose **first** item may carry an only-if-new condition.
+
+    True when it committed. False only when the transaction was cancelled *solely* because
+    that first item's condition failed, i.e. the row is already stored. A conflict or throttle
+    is retried a few times and then raised, as is anything else: the sync then fails with its
+    cursor unmoved, and a re-run finishes the job.
+    """
+    for attempt in range(1, _TRANSACT_ATTEMPTS + 1):
+        try:
+            _client.transact_write_items(TransactItems=items)
+            return True
+        except ClientError as err:
+            codes = _cancellation_codes(err)
+            if codes is None:
+                raise
+            failed = [code for code in codes if code != "None"]
+            if failed == [_CONDITION_FAILED] and codes[0] == _CONDITION_FAILED:
+                return False
+            transient = bool(failed) and all(code in _TRANSIENT_REASONS for code in failed)
+            if not transient or attempt == _TRANSACT_ATTEMPTS:
+                raise
+            time.sleep(0.05 * 2 ** attempt)
+    return False  # unreachable; keeps the return type total
 
 
 def _with_decision(sub: str, item_body: dict, previous: dict) -> dict:
@@ -636,16 +741,10 @@ def _with_decision(sub: str, item_body: dict, previous: dict) -> dict:
 def insert_plaid_transaction(sub: str, item_body: dict) -> bool:
     """Add a Plaid transaction and its pointer. False if the transaction already exists —
     dedupe is key-equality on Plaid's ``transaction_id`` (AP 7)."""
-    try:
-        _client.transact_write_items(TransactItems=[
-            _txn_put(sub, item_body, only_if_new=True),
-            _pointer_put(sub, item_body["txnId"], item_body["date"]),
-        ])
-        return True
-    except ClientError as err:
-        if _is_cancelled(err):
-            return False
-        raise
+    return _transact([
+        _txn_put(sub, item_body, only_if_new=True),
+        _pointer_put(sub, item_body["txnId"], item_body["date"]),
+    ])
 
 
 def update_plaid_transaction(
@@ -668,7 +767,7 @@ def update_plaid_transaction(
     status = stored.get("categoryStatus")
 
     if stored_date != item_body["date"]:
-        _client.transact_write_items(TransactItems=[
+        _transact([
             _delete(sub, txn_sk(stored_date, txn_id)),
             _txn_put(sub, _with_decision(sub, item_body, stored), only_if_new=False),
             _pointer_put(sub, txn_id, item_body["date"]),
@@ -734,18 +833,17 @@ def merge_pending_transaction(
         _delete(sub, txn_sk(pending_date, pending_transaction_id)),
         _delete(sub, plaid_txn_pointer_sk(pending_transaction_id)),
     ]
-    try:
-        _client.transact_write_items(TransactItems=[
-            _txn_put(sub, _with_decision(sub, item_body, pending), only_if_new=True),
-            _pointer_put(sub, item_body["txnId"], item_body["date"]),
-            *drop_pending,
-        ])
-    except ClientError as err:
-        if not _is_cancelled(err):
-            raise
-        # The posted row is somehow already stored; it keeps its own categorization, and the
-        # pending row still has to go so the charge is not counted twice.
-        _client.transact_write_items(TransactItems=drop_pending)
+    written = _transact([
+        _txn_put(sub, _with_decision(sub, item_body, pending), only_if_new=True),
+        _pointer_put(sub, item_body["txnId"], item_body["date"]),
+        *drop_pending,
+    ])
+    if not written:
+        # Only reached when the posted row is *confirmed* already stored (its only-if-new
+        # condition failed). It keeps its own categorization, and the pending row still has
+        # to go so the charge is not counted twice. A conflict or throttle never gets here:
+        # `_transact` raises, so the pending row is never deleted without its posted row.
+        _transact(drop_pending)
     return "merged", pending.get("categoryStatus")
 
 
@@ -758,7 +856,7 @@ def delete_plaid_transaction(sub: str, transaction_id: str) -> bool:
     stored_date = get_plaid_txn_date(sub, transaction_id)
     if stored_date is None:
         return False
-    _client.transact_write_items(TransactItems=[
+    _transact([
         _delete(sub, txn_sk(stored_date, transaction_id)),
         _delete(sub, plaid_txn_pointer_sk(transaction_id)),
     ])

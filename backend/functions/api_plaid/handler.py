@@ -34,9 +34,10 @@ from adapters.dynamo import (
     list_plaid_items,
     put_plaid_item,
     set_import_status,
+    set_plaid_item_accounts,
 )
 from adapters.lambda_invoke import start_plaid_sync
-from adapters.plaid import PlaidClient, PlaidError
+from adapters.plaid import PlaidClient, PlaidConfigError, PlaidError
 from adapters.secrets import (
     SecretConfigError,
     get_access_token,
@@ -45,12 +46,14 @@ from adapters.secrets import (
 )
 from core.ids import new_ulid
 from core.imports import STATUS_FAILED
-from core.plaid_items import new_plaid_item, plaid_item_view
+from core.plaid_items import account_view, new_plaid_item, plaid_item_view
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 _plaid: PlaidClient | None = None
+
+_ROUTES = frozenset({"POST /plaid/link-token", "POST /plaid/exchange", "POST /plaid/sync"})
 
 # Plaid's Sandbox bank that accepts the special test users (non-OAuth).
 _SANDBOX_DEFAULT_INSTITUTION = "ins_109508"  # First Platypus Bank
@@ -80,13 +83,19 @@ def handler(event: dict, context) -> dict:
         return _response(401, {"message": "Unauthorized"})
 
     route = f"{_method(event)} {_path(event)}"
+    if route not in _ROUTES:
+        return _response(404, {"message": "Not found"})
     try:
         if route == "POST /plaid/link-token":
             return _link_token(sub)
         if route == "POST /plaid/exchange":
             return _exchange(sub, _parse_body(event))
-        if route == "POST /plaid/sync":
-            return _sync(sub, _parse_body(event))
+        return _sync(sub, _parse_body(event))
+    except PlaidConfigError as err:
+        # Checked before ValueError (its base class): a bad PLAID_ENV is this deployment's
+        # fault, not the caller's, and the config detail stays in the log.
+        logger.error(json.dumps({"route": route, "sub": sub, "err": str(err)}))
+        return _response(503, {"message": "Bank connections are not configured."})
     except ValueError as err:
         logger.info(json.dumps({"route": route, "sub": sub, "err": str(err)}))
         return _response(400, {"message": str(err)})
@@ -101,8 +110,6 @@ def handler(event: dict, context) -> dict:
     except SecretConfigError as err:
         logger.error(json.dumps({"route": route, "sub": sub, "err": str(err)}))
         return _response(503, {"message": "Bank connections are not configured."})
-
-    return _response(404, {"message": "Not found"})
 
 
 # --- routes -----------------------------------------------------------------------------
@@ -152,9 +159,15 @@ def _link(sub: str, *, public_token: str, institution_id: str, institution_name:
           link_session_id: str) -> dict:
     """Exchange a public token, persist the result, and start the first sync.
 
-    Order matters: the access token is stored *before* anything else, because the exchange is
-    the moment the connection exists. If a later step fails, a retry within the public
-    token's 30-minute life returns the same connection rather than a second one.
+    A public token is **single-use**: the exchange is attempted once, and once it succeeds
+    the connection exists at Plaid and can never be re-derived from the same token. So the
+    two things that make it usable are written immediately, before any other call that could
+    fail: the access token (Secrets Manager), then the connection record (DynamoDB).
+    Everything after that - the account list, the first sync - is best-effort here, because
+    the sync worker fetches accounts itself and "Sync now" can always be pressed again.
+
+    The one gap left is a failure *between* those two writes. It is logged with the item ID
+    (which is not a secret) so the stored token can be matched to the connection by hand.
     """
     client = _client()
     exchanged = client.item_public_token_exchange(public_token=public_token)
@@ -162,19 +175,46 @@ def _link(sub: str, *, public_token: str, institution_id: str, institution_name:
     access_token = exchanged["access_token"]
     store_access_token(sub, item_id, access_token)
 
-    accounts_response = client.accounts_get(access_token=access_token)
-    plaid_item = accounts_response.get("item") or {}
     record = new_plaid_item(
         item_id,
-        institution_id=institution_id or str(plaid_item.get("institution_id") or ""),
-        institution_name=institution_name or str(plaid_item.get("institution_name") or ""),
-        accounts=accounts_response.get("accounts") or [],
+        institution_id=institution_id,
+        institution_name=institution_name,
+        accounts=[],
         plaid_env=client.plaid_env,
         created_at=datetime.now(UTC).isoformat(),
         link_session_id=link_session_id,
     )
-    created = put_plaid_item(sub, record)
+    try:
+        created = put_plaid_item(sub, record)
+    except Exception:
+        logger.exception(json.dumps({
+            "route": "POST /plaid/exchange", "sub": sub, "itemId": item_id,
+            "outcome": "token_stored_without_item_record",
+        }))
+        raise
     stored = record if created else (get_plaid_item(sub, item_id) or record)
+
+    try:
+        accounts_response = client.accounts_get(access_token=access_token)
+    except PlaidError:
+        # Already logged by the adapter. The connection is recorded; the first sync fills
+        # in the accounts.
+        accounts_response = None
+    if accounts_response is not None:
+        plaid_item = accounts_response.get("item") or {}
+        details = {
+            "accounts": [account_view(a) for a in accounts_response.get("accounts") or []],
+            "institutionId": stored.get("institutionId")
+            or str(plaid_item.get("institution_id") or ""),
+            "institutionName": stored.get("institutionName")
+            or str(plaid_item.get("institution_name") or ""),
+        }
+        set_plaid_item_accounts(
+            sub, item_id, accounts=details["accounts"],
+            institution_id=details["institutionId"],
+            institution_name=details["institutionName"],
+        )
+        stored = {**stored, **details}
 
     # Always sync once at link time: it is also what makes Plaid start tracking updates.
     import_id = _start_sync(sub, stored)
@@ -226,7 +266,10 @@ def _start_sync(sub: str, item: dict) -> str:
 
 
 def _sandbox_action(event: dict) -> dict:
-    client = _client()
+    try:
+        client = _client()
+    except PlaidConfigError as err:
+        return {"ok": False, "error": str(err)}
     if client.plaid_env != "sandbox":
         return {"ok": False, "error": "sandbox actions are disabled outside Plaid Sandbox"}
     sub = event.get("sub")
@@ -236,13 +279,15 @@ def _sandbox_action(event: dict) -> dict:
     action = event["action"]
     try:
         if action == "sandbox_link":
+            institution_id = str(event.get("institutionId") or _SANDBOX_DEFAULT_INSTITUTION)
             created = client.sandbox_public_token_create(
-                institution_id=str(event.get("institutionId") or _SANDBOX_DEFAULT_INSTITUTION),
+                institution_id=institution_id,
                 username=str(event.get("username") or "user_good"),
                 password=str(event.get("password") or "pass_good"),
             )
-            result = _link(sub, public_token=created["public_token"], institution_id="",
-                           institution_name="", link_session_id="")
+            result = _link(sub, public_token=created["public_token"],
+                           institution_id=institution_id, institution_name="",
+                           link_session_id="")
             return {"ok": True, **result}
         if action == "sandbox_refresh":
             item_id = str(event.get("itemId") or "")

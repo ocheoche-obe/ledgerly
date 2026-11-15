@@ -45,6 +45,11 @@ _RETRYABLE_CODES = frozenset({"INSTITUTION_DOWN", "INSTITUTION_NOT_RESPONDING"})
 _RETRYABLE_TYPES = frozenset({"RATE_LIMIT_EXCEEDED"})
 
 
+class PlaidConfigError(ValueError):
+    """This deployment's Plaid configuration is unusable (e.g. an unsupported ``PLAID_ENV``).
+    A server-side fault, never something the caller sent."""
+
+
 class PlaidError(Exception):
     """A Plaid API failure, reduced to what is safe to log and useful to act on."""
 
@@ -84,7 +89,7 @@ def base_url(plaid_env: str) -> str:
     try:
         return _BASE_URLS[plaid_env]
     except KeyError:
-        raise ValueError(
+        raise PlaidConfigError(
             "PLAID_ENV must be 'sandbox' - no other Plaid environment is enabled (ADR-014)"
         ) from None
 
@@ -145,8 +150,15 @@ class PlaidClient:
         """``/item/public_token/exchange`` → ``{access_token, item_id, request_id}``.
 
         The caller must store the access token server-side and never return or log it.
+
+        **Sent exactly once, never retried.** A public token is single-use. If the first
+        attempt reached Plaid but its response was lost, a second attempt would be refused
+        and look like a plain failure while a live connection existed with no token on our
+        side. One attempt keeps the outcome unambiguous: either a token came back or the
+        owner links again.
         """
-        return self._post("/item/public_token/exchange", {"public_token": public_token})
+        return self._post("/item/public_token/exchange", {"public_token": public_token},
+                          max_attempts=1)
 
     # --- Data ---------------------------------------------------------------------------
 
@@ -185,7 +197,8 @@ class PlaidClient:
 
     # --- transport ----------------------------------------------------------------------
 
-    def _post(self, endpoint: str, body: dict) -> dict:
+    def _post(self, endpoint: str, body: dict, *, max_attempts: int | None = None) -> dict:
+        max_attempts = self._max_attempts if max_attempts is None else max_attempts
         client_id, secret = self._credentials()
         request = urllib.request.Request(
             self._base_url + endpoint,
@@ -205,7 +218,7 @@ class PlaidClient:
             error = self._attempt(request, endpoint)
             if not isinstance(error, PlaidError):
                 return error  # the parsed success response
-            if not error.retryable or attempt >= self._max_attempts:
+            if not error.retryable or attempt >= max_attempts:
                 logger.warning(json.dumps({"stage": "plaid", "attempt": attempt,
                                            **error.log_fields()}))
                 raise error

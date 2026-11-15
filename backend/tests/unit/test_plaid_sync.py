@@ -16,6 +16,7 @@ import sys
 import boto3
 import pytest
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from adapters.plaid import PlaidError
@@ -190,12 +191,13 @@ def env(monkeypatch):
 
         modules = ("adapters.dynamo", "adapters.sqs", "adapters.secrets",
                    "adapters.lambda_invoke", "functions.api_plaid.handler",
-                   "functions.plaid_sync.handler")
+                   "functions.plaid_sync.handler", "functions.plaid_sync.on_failure")
         for mod in modules:
             sys.modules.pop(mod, None)
         dynamo = importlib.import_module("adapters.dynamo")
         api = importlib.import_module("functions.api_plaid.handler")
         worker = importlib.import_module("functions.plaid_sync.handler")
+        monkeypatch.setattr(dynamo.time, "sleep", lambda _s: None)
 
         plaid = FakePlaid()
         api._plaid = plaid
@@ -470,13 +472,23 @@ def test_removed_deletes_the_row_and_its_pointer(env):
     assert record["duplicate"] == 1  # the unknown ID needed no write
 
 
-def test_an_unusable_transaction_is_counted_not_fatal(env):
+def test_an_unusable_transaction_is_counted_and_retried_by_the_next_sync(env):
     env.link()
     broken = {**txn("bad"), "date": None}
     result, record = env.run_worker(page(added=[broken, txn("t1")], next_cursor="c1"))
     assert (result["added"], result["failed"]) == (1, 1)
     assert record["status"] == "complete"
     assert record["errors"][0]["error"] == "transaction has no usable date"
+    assert "try them again" in record["errors"][-1]["error"]
+    # The cursor did not move past the row that could not be read...
+    assert env.cursor() == ""
+    assert env.dynamo.get_plaid_item(SUB, ITEM_ID)["lastSyncedAt"]
+
+    # ...so the next sync is sent the same updates again, and this time the row is usable.
+    result, _ = env.run_worker(page(added=[txn("bad"), txn("t1")], next_cursor="c1"))
+    assert env.plaid.sync_cursors[-1] == ""
+    assert (result["added"], result["duplicate"], result["failed"]) == (1, 1, 0)
+    assert set(env.txns()) == {"bad", "t1"}
     assert env.cursor() == "c1"
 
 
@@ -531,3 +543,232 @@ def test_sandbox_actions_are_refused_outside_sandbox_and_are_not_http_routes(env
     env.plaid.plaid_env = "sandbox"
     status, _, _ = env.api_call("/plaid/sandbox_link", {"action": "sandbox_link"})
     assert status == 404
+
+
+# --- review fixes (PR #61) -----------------------------------------------------------------
+
+
+def decision(category_id="cat-food", status="auto"):
+    return Decision(category_id=category_id, status=status, confidence=0.95,
+                    needs_review=False, source="llm")
+
+
+def cancelled(*codes) -> ClientError:
+    """A TransactionCanceledException with the given per-item reason codes."""
+    return ClientError(
+        {"Error": {"Code": "TransactionCanceledException", "Message": "cancelled"},
+         "CancellationReasons": [{"Code": code} for code in codes]},
+        "TransactWriteItems",
+    )
+
+
+def fail_transactions(env, monkeypatch, *errors):
+    """Make the next ``len(errors)`` write transactions fail, then behave normally."""
+    real = env.dynamo._client.transact_write_items
+    queue = list(errors)
+    calls = []
+
+    def fake(**kwargs):
+        calls.append(kwargs)
+        if queue:
+            raise queue.pop(0)
+        return real(**kwargs)
+
+    monkeypatch.setattr(env.dynamo._client, "transact_write_items", fake)
+    return calls
+
+
+def test_categorizing_a_row_that_no_longer_exists_writes_nothing(env):
+    # The categorizer read a row, then a sync removed it before the write.
+    env.link()
+    env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    env.run_worker(page(removed=["t1"], next_cursor="c2"))
+    before = env.all_items()
+    assert env.dynamo.apply_categorization(SUB, "2026-11-10", "t1", decision()) is False
+    assert env.all_items() == before  # no stub row with only category fields
+
+
+def test_categorizing_under_a_pending_rows_old_key_after_it_posted_writes_nothing(env):
+    env.link()
+    env.run_worker(page(added=[txn("p1", pending=True, date="2026-11-09")], next_cursor="c1"))
+    env.run_worker(page(added=[txn("t1", pending_id="p1")], removed=["p1"], next_cursor="c2"))
+    assert env.dynamo.apply_categorization(SUB, "2026-11-09", "p1", decision()) is False
+    rows = env.txns()
+    assert set(rows) == {"t1"}
+    assert all("txnId" in i and "amountCents" in i
+               for i in env.all_items() if i["sk"].startswith("TXN#"))
+    # The posted row, under its own key, is still categorizable.
+    assert env.dynamo.apply_categorization(SUB, "2026-11-10", "t1", decision()) is True
+
+
+def test_categorizing_under_the_old_date_after_a_row_moved_writes_nothing(env):
+    env.link()
+    env.run_worker(page(added=[txn("t1", date="2026-11-10")], next_cursor="c1"))
+    env.run_worker(page(modified=[txn("t1", date="2026-11-12")], next_cursor="c2"))
+    assert env.dynamo.apply_categorization(SUB, "2026-11-10", "t1", decision()) is False
+    assert [i["sk"] for i in env.all_items() if i["sk"].startswith("TXN#")] == [
+        "TXN#2026-11-12#t1"]
+
+
+def test_the_connection_is_recorded_before_the_account_list_is_fetched(env):
+    seen = {}
+
+    def accounts_get(*, access_token):
+        seen["record"] = env.dynamo.get_plaid_item(SUB, ITEM_ID)
+        raise PlaidError(error_type="INSTITUTION_ERROR", error_code="INSTITUTION_DOWN",
+                         request_id="req-a", status=400, endpoint="/accounts/get")
+
+    env.plaid.accounts_get = accounts_get
+    status, body, _ = env.api_call("/plaid/exchange", {
+        "publicToken": PUBLIC_TOKEN,
+        "institution": {"id": "ins_109508", "name": "First Platypus Bank"}})
+    # The record existed before the call that failed, and the link still succeeds.
+    assert seen["record"]["itemId"] == ITEM_ID
+    assert status == 201
+    assert (body["itemId"], body["accounts"]) == (ITEM_ID, [])
+    assert body["institutionName"] == "First Platypus Bank"
+    assert len(env.started) == 1
+    assert env.plaid.exchanged == [PUBLIC_TOKEN]  # exchanged once, never again
+
+
+def test_a_connection_linked_without_accounts_gets_them_from_its_first_sync(env):
+    real_accounts_get = env.plaid.accounts_get
+
+    def down(*, access_token):
+        raise PlaidError(error_type="INSTITUTION_ERROR", error_code="INSTITUTION_DOWN",
+                         request_id="req-a", status=400, endpoint="/accounts/get")
+
+    env.plaid.accounts_get = down
+    env.link()
+    env.plaid.accounts_get = real_accounts_get
+    env.plaid.script = [page(added=[txn("t1")], next_cursor="c1")]
+    env.worker.handler(env.started[-1], None)
+    assert env.dynamo.get_plaid_item(SUB, ITEM_ID)["accounts"][0]["accountId"] == (
+        "plaid-checking-0000")
+    assert env.txns()["t1"]["accountId"] == "plaid-checking-0000"
+
+
+def test_a_failed_record_write_is_logged_with_the_item_id_and_never_the_token(
+        env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+
+    def boom(sub, record):
+        raise RuntimeError("dynamo unavailable")
+
+    monkeypatch.setattr(env.api, "put_plaid_item", boom)
+    with pytest.raises(RuntimeError):
+        env.api_call("/plaid/exchange", {"publicToken": PUBLIC_TOKEN})
+    assert "token_stored_without_item_record" in caplog.text
+    assert ITEM_ID in caplog.text
+    assert ACCESS_TOKEN not in caplog.text
+
+
+def test_a_throttled_insert_is_an_error_not_an_already_exists(env, monkeypatch):
+    env.link()
+    calls = fail_transactions(env, monkeypatch, *[cancelled("ThrottlingError", "None")] * 4)
+    result, record = env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    assert len(calls) == 4  # retried, then gave up
+    assert result["status"] == "failed"
+    assert record["status"] == "failed"
+    assert env.txns() == {}
+    assert env.cursor() == ""  # so the next sync delivers t1 again
+
+    result, _ = env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    assert result["added"] == 1
+
+
+def test_a_transient_conflict_is_retried_and_the_row_is_written(env, monkeypatch):
+    env.link()
+    calls = fail_transactions(env, monkeypatch, cancelled("TransactionConflict", "None"))
+    result, _ = env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    assert len(calls) == 2
+    assert (result["added"], result["duplicate"]) == (1, 0)
+    assert set(env.txns()) == {"t1"}
+
+
+def test_a_conflict_during_a_merge_never_deletes_the_pending_row_alone(env, monkeypatch):
+    env.link()
+    env.run_worker(page(added=[txn("p1", pending=True)], next_cursor="c1"))
+    env.categorize("p1", "cat-food")
+    calls = fail_transactions(
+        env, monkeypatch,
+        *[cancelled("None", "None", "TransactionConflict", "None")] * 4)
+    result, _ = env.run_worker(
+        page(added=[txn("t1", pending_id="p1")], removed=["p1"], next_cursor="c2"))
+    assert len(calls) == 4  # the merge only - no follow-up "drop the pending row" write
+    assert result["status"] == "failed"
+    assert set(env.txns()) == {"p1"}
+    assert env.pointers() == {"p1"}
+    assert env.cursor() == "c1"
+
+    # The replay completes the merge and the owner's category survives.
+    result, _ = env.run_worker(
+        page(added=[txn("t1", pending_id="p1")], removed=["p1"], next_cursor="c2"))
+    rows = env.txns()
+    assert set(rows) == {"t1"}
+    assert (rows["t1"]["categoryId"], rows["t1"]["categoryStatus"]) == ("cat-food", "corrected")
+
+
+def test_a_condition_failure_on_any_item_but_the_guarded_put_is_not_already_exists(
+        env, monkeypatch):
+    calls = fail_transactions(env, monkeypatch, cancelled("None", "ConditionalCheckFailed"))
+    with pytest.raises(ClientError):
+        env.dynamo._transact([{"Put": {}}, {"Put": {}}])
+    assert len(calls) == 1  # not transient, so not retried either
+
+
+def test_a_genuinely_existing_row_is_still_reported_as_a_duplicate(env):
+    # Against moto's real cancellation reasons, not a hand-built error.
+    env.link()
+    env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    row = {k: v for k, v in env.txns()["t1"].items() if k not in ("pk", "sk")}
+    assert env.dynamo.insert_plaid_transaction(SUB, row) is False
+
+
+def test_a_misconfigured_plaid_environment_is_a_503_not_a_400(env, monkeypatch):
+    monkeypatch.setenv("PLAID_ENV", "production")
+    env.api._plaid = None  # force the real client to be built
+    status, body, _ = env.api_call("/plaid/link-token")
+    assert status == 503
+    assert body == {"message": "Bank connections are not configured."}
+    refused = env.api.handler({"action": "sandbox_link", "sub": SUB}, None)
+    assert refused["ok"] is False
+
+
+def test_unknown_paths_are_404(env):
+    status, _, _ = env.api_call("/plaid/nope")
+    assert status == 404
+
+
+def destination_event(payload) -> dict:
+    return {"version": "1.0", "requestContext": {"condition": "RetriesExhausted"},
+            "requestPayload": payload, "responseContext": {"functionError": "Unhandled"},
+            "responsePayload": {"errorMessage": "Task timed out after 180.00 seconds"}}
+
+
+def test_a_sync_that_died_twice_is_marked_failed_instead_of_parsing_forever(env):
+    on_failure = importlib.import_module("functions.plaid_sync.on_failure")
+    env.link()
+    _, body, _ = env.api_call("/plaid/sync")
+    import_id = body["imports"][0]["importId"]
+    env.dynamo.set_import_status(SUB, import_id, "parsing")  # the worker got this far, then died
+
+    assert on_failure.handler(destination_event(env.started[-1]), None) == {"marked": True}
+    record = env.dynamo.get_import(SUB, import_id)
+    assert record["status"] == "failed"
+    assert "did not finish" in record["errors"][0]["error"]
+    assert env.cursor() == ""
+
+
+def test_the_failure_handler_never_overwrites_a_finished_import_or_invents_one(env):
+    on_failure = importlib.import_module("functions.plaid_sync.on_failure")
+    env.link()
+    _, record = env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    assert record["status"] == "complete"
+    assert on_failure.handler(destination_event(env.started[-1]), None) == {"marked": False}
+    assert env.dynamo.get_import(SUB, record["importId"])["status"] == "complete"
+
+    ghost = {"sub": SUB, "itemId": ITEM_ID, "importId": "no-such-import"}
+    assert on_failure.handler(destination_event(ghost), None) == {"marked": False}
+    assert env.dynamo.get_import(SUB, "no-such-import") is None
+    assert on_failure.handler({"requestPayload": "garbage"}, None) == {"marked": False}
