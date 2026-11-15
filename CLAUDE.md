@@ -267,6 +267,14 @@ _Solidified at the end of Slice 1. Binding:_
     or self-evident from the PR body.
   - When it isn't obvious which bucket a PR is in, ask. Anything that changes deploy behaviour,
     IAM, or data handling is a slice PR regardless of how small the diff looks.
+- **Blind review after every PR (owner rule, 2026-11-15; binding):** after opening *any* PR —
+  slice or cleanup — run **`/review-pr`**. It reviews the PR in a fresh, read-only subagent
+  (`.claude/agents/pr-reviewer.md`) that has not seen the building conversation, and reports
+  blocker / should-fix / nit findings with file:line plus a one-line verdict. **Fix every
+  blocker** (push, let CI re-run, and re-run `/review-pr` if the fix was non-trivial), then
+  **tell the owner what it found** — blockers and how each was fixed, should-fixes and what was
+  done or deferred — **before asking the owner to merge** (or, for a cleanup PR, before merging
+  it yourself). It complements `/code-review` and `/security-review`; it doesn't replace them.
 
 ## Cost constraints
 
