@@ -57,7 +57,7 @@ def to_item(normalized: dict, *, import_id: str) -> dict:
     else — normalized fields, raw row, import provenance, uncategorized defaults — is here.
     """
     return {
-        **normalized,  # type, txnId, date, amountCents, direction, balanceCents,
+        **normalized,  # type, txnId, date, amountCents, direction, balanceCents (CSV only),
                        # accountId, descriptionRaw, merchantNormalized, sourceType, raw
         "categoryId": None,
         "categoryStatus": STATUS_UNCATEGORIZED,
@@ -73,7 +73,8 @@ def txn_view(item: dict) -> dict:
         "date": item["date"],
         "amountCents": int(item["amountCents"]),
         "direction": item.get("direction", ""),
-        "balanceCents": int(item["balanceCents"]),
+        # Absent on Plaid rows: Plaid supplies no running balance (ADR-014).
+        "balanceCents": int(item["balanceCents"]) if item.get("balanceCents") is not None else None,
         "accountId": item.get("accountId", ""),
         "descriptionRaw": item.get("descriptionRaw", ""),
         "merchantNormalized": item.get("merchantNormalized", ""),
@@ -83,4 +84,8 @@ def txn_view(item: dict) -> dict:
         "confidence": float(item["confidence"]) if item.get("confidence") is not None else None,
         "needsReview": bool(item.get("needsReview", False)),
         "importId": item.get("importId", ""),
+        # A pending charge is provisional: its amount can change when it posts, or it can
+        # disappear. Always false for CSV rows, which are posted by definition (ADR-014).
+        "pending": bool(item.get("pending", False)),
+        "source": item.get("source", "csv"),
     }

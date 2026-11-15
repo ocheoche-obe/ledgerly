@@ -716,4 +716,163 @@ never a silent inference the owner can't see or correct.
 
 ---
 
+## ADR-014: Plaid becomes the primary ingest source (Sandbox only for now)
+
+**Status:** Accepted (2026-11-15, Slice 9 — owner sign-off, including pending transactions counting toward spend; proposed 2026-11-14)
+
+### Context
+
+Ingest has been CSV upload since Slice 4. The owner is pivoting the primary source to Plaid
+ahead of the trigger recorded in architecture §1.3 ("v1 success criterion 1 met + owner
+appetite to revise the cost ceiling") — an explicit owner decision to reorder the roadmap,
+recorded here rather than made silently.
+
+The architecture already anticipated this: §1.2 treats Plaid as "just another producer that
+writes transactions and enqueues categorization jobs". The categorizer, cycle engine, budgets
+and dashboard are therefore unchanged. What Plaid does force is everything the CSV path never
+needed:
+
+- **Ledgerly's first runtime secrets.** Plaid API keys and a per-connection access token.
+  Architecture §4.3 is "there are no runtime secrets", with a standing rule that Plaid tokens go
+  in Secrets Manager (NFR-4.3/4.5).
+- **Ledgerly's first outbound call to a non-AWS service**, from Lambdas whose asset has no
+  `pip` step (zero runtime dependencies).
+- **Mutable transactions.** A CSV row never changes. Plaid's `/transactions/sync` returns
+  `added`, `modified` and `removed`, and a pending charge that posts arrives as a *remove* plus an
+  *add* under a **new** `transaction_id`.
+- **A different identity.** Plaid supplies a stable `transaction_id` and no running balance, so
+  ADR-012's content-hash natural key neither applies nor is needed (ADR-012 said as much).
+- **A storage key that embeds the date** (`TXN#<date>#<txnId>`), while `removed` carries only
+  the `transaction_id` and `modified` may change the date.
+
+Plaid Dashboard state read on 2026-11-14 (read-only): environments authorized = Sandbox and
+Production; Transactions is enabled in both; **no trial products are listed**; no redirect URIs
+and no webhook receivers are registered; one Link customization (`default`).
+
+### Decision
+
+**Scope: Plaid Sandbox only, `dev` stage only.** The `prod` stack gets no Plaid routes, no Plaid
+secrets and no UI. Going to Plaid Production is a separate ADR.
+
+1. **Where Plaid fits**
+   - `POST /plaid/link-token` and `POST /plaid/exchange` (new `api_plaid` Lambda, behind the
+     existing JWT authorizer). The exchange stores the access token, writes a `PLAIDITEM#<itemId>`
+     item (institution, accounts, cursor — never the token), and triggers the first sync.
+   - `POST /plaid/sync` starts a sync and returns an import ID; the work runs in a separate
+     **`plaid_sync` worker Lambda** (async-invoked). It loops `/transactions/sync` to the end,
+     maps each transaction through a new pure `core/plaid_normalize.py` into
+     `core/transactions.to_item`, writes, then saves the cursor, then enqueues categorization for
+     newly added rows — the same order and best-effort enqueue as the CSV importer.
+   - **A sync is recorded as an `IMPORT#` item** (source `plaid`; counts added / modified /
+     removed / skipped), so the existing import report and polling serve it.
+   - **Secrets Manager holds both secrets** (the §4.3 standing rule, followed as written): one
+     secret for the Plaid API keys, whose value the owner sets by hand; one for access tokens,
+     written by the exchange Lambda. Each Lambda gets IAM on only the secret it needs. Values are
+     never logged, never returned to the browser, never in CDK or the repo.
+   - **Plaid calls use stdlib `urllib`** behind `adapters/plaid.py` — five endpoints, no SDK, no
+     change to the Lambda build. Request/response shapes are checked against Plaid's published
+     API reference at implementation time, not written from memory.
+   - Link is initialized with `transactions` as the only required product, and `identity`
+     consented-but-unused, so account-ownership verification can be added later without sending
+     the owner back through Link. Cached account balances arrive with the account list at no
+     charge and are stored on the `PLAIDITEM#` item at each sync.
+2. **Dedupe and mutation**
+   - `txnId` **is Plaid's `transaction_id`, verbatim.** Dedupe stays key-equality on the existing
+     conditional put (AP 7). It cannot collide with the 16-hex CSV IDs.
+   - A **pointer item `PLAIDTXN#<transaction_id>` → date** is written with each transaction, so
+     `modified` and `removed` can find a row whose sort key embeds a date they do not carry.
+   - **Pending transactions are stored and shown** (owner decision, 2026-11-15), flagged
+     `pending: true`. They count toward a category's spend, and the cycle summary reports how much
+     of each figure is still pending so the dashboard can say so. A pending amount is provisional:
+     it can change when the charge posts (tips, fuel and hotel holds) or disappear if a hold
+     drops off.
+   - **A pending charge that posts is one transaction, not two.** Plaid reports it as a `removed`
+     pending ID plus an `added` posted row carrying `pending_transaction_id`. Within a sync, all
+     pages are buffered and the posted rows are applied *before* the removals: the posted row
+     inherits the pending row's category, status, confidence and review flag, the pending row is
+     deleted, and nothing is re-categorized. If the removal and the posted row arrive in
+     *different* syncs, the link is gone — the posted row is categorized afresh, and an owner
+     correction made on the pending row is lost unless a merchant rule (Slice 7) re-applies it.
+   - `added` → conditional put, enqueue if new. `modified` → update source fields in place,
+     **preserving category, status and confidence**; if the date changed, delete-and-put in one
+     transaction carrying those fields across. `removed` → delete the row and its pointer, counted
+     in the import report. Plaid's sign convention is inverted on the way in (Plaid positive =
+     money out; Ledgerly negative = debit). `balanceCents` becomes optional.
+3. **Trigger: a "Sync now" button, plus one automatic sync right after linking.** No schedule, no
+   webhooks in this slice.
+4. **CSV import stays, unchanged**, as the second source behind the same seam (FR-2.3).
+
+**Cost ceiling: NFR-1.1 stays at $10/month and is not revised by this ADR.** Plaid Sandbox is
+free. The AWS increment is two Secrets Manager secrets in `dev` ≈ **$0.80/month**, taking the
+expected steady state from ≈ $2–4 to ≈ $3–5. The owner states Plaid's Trial plan is also free;
+that is not confirmed by the Dashboard, which lists no trial products on this account, and it is
+out of scope here. **No Production Item may be created until a follow-up ADR records verified
+Plaid pricing against the ceiling** (NFR-1.1's own rule).
+
+### Alternatives considered
+
+- **Access token in SSM Parameter Store (SecureString)** — free, same IAM posture, and arguably
+  satisfies NFR-4.3's "a secrets manager". Rejected for now because §4.3 names Secrets Manager
+  and $0.80/month fits; it is the fallback if the ceiling tightens.
+- **Access token in DynamoDB** — rejected: it would sit beside the data it unlocks, in every
+  PITR backup, readable by every Lambda with table access.
+- **`plaid-python` SDK** — rejected: needs a dependency-bundling step the Lambda asset does not
+  have, for five HTTP calls.
+- **Sync inline in the API Lambda** — simpler, but capped by API Gateway's 30-second integration
+  limit (Plaid notes the first sync after a history backfill can be several times slower), and it
+  is not the shape a webhook would invoke later. The worker is.
+- **Hashing `transaction_id` to 16 hex** — keeps IDs uniform, loses traceability to Plaid for no
+  gain.
+- **Skipping pending transactions** (the original proposal) — simpler, and the same view the CSV
+  exports gave, but the dashboard would lag the bank by the 1–3 days a charge takes to post. The
+  owner wants pending spend visible, so the reconciliation above is accepted as the price.
+- **Showing pending but leaving it out of "spent"** — keeps every figure final, but understates
+  what has actually left the budget, which is the question the dashboard exists to answer.
+- **Tombstoning removed transactions** instead of deleting — every read path would have to filter
+  them. PITR is the recovery story.
+- **A lookup GSI on the Plaid ID** instead of pointer items — a third index for one access
+  pattern.
+- **Scheduled polling** — Plaid's guidance is explicit that freshness is Plaid-driven and a
+  polling schedule is not the intended mechanism.
+- **Webhooks now** — the right long-term trigger, deferred because it needs three things that
+  each deserve their own decision: a public unauthenticated route (FR-1.1 says there is none), an
+  ES256 JWT verification library (Plaid says not to hand-roll it; that ends zero-runtime-deps),
+  and resolving the user from `item_id` alone. The webhook URL can be attached to an existing
+  Item later, so deferring costs nothing.
+- **Removing CSV import** — it is the only source of real data while Plaid is Sandbox-only, and
+  afterwards the only way to backfill beyond Plaid's history window or bridge a broken connection.
+- **Plaid Balance (real-time) and Assets (point-in-time report)** — Balance is billed per call and
+  takes seconds; Assets is a lending product. The free cached balance covers "what's in the
+  account as of the last sync". **Plaid Enrich** — only helps the CSV-imported rows (Plaid's own
+  transactions arrive enriched), and is not among this account's enabled products; add-later.
+
+### Consequences
+
+- **"Zero runtime secrets" ends.** Architecture §4.3, the CLAUDE.md summary and the AWS-tooling
+  note ("no Secrets Manager reads should ever be needed") are amended when this ADR is accepted.
+  Agents still never fetch secret *values* into context.
+- **New egress** to `sandbox.plaid.com`: transaction data now leaves AWS to a third party, the
+  minimum the feature requires (NFR-4.6).
+- **Sandbox data lands in the `dev` table next to the 153 real Chase rows** and will show up in
+  dashboard totals. Every Plaid row is tagged with its source and Plaid environment so it can be
+  purged by query before any Production Item is linked.
+- **Dashboard figures are no longer all final.** `core/budgets.summarize` gains a pending
+  amount per category and in the totals, and the dashboard and transaction list mark pending
+  rows — a small, additive change to two things this ADR otherwise leaves alone. Pending is only
+  as fresh as the last sync, and some banks (Capital One, USAA) report no pending at all.
+- **"Sync now" is a stopgap, on the record.** Moving to webhooks is the named follow-up, not a
+  silent default.
+- **Deletes now happen without a per-row owner action** (`removed`). They are triggered by an
+  owner-initiated sync, counted in the import report, and recoverable through PITR.
+- **Open for the Production slice, deliberately not solved here:** the same real transaction
+  arriving by CSV and by Plaid shares no key and would double-count (likely answer: a per-account
+  cutover date, not fuzzy matching); Chase connects by OAuth, which needs a registered redirect
+  URI and Plaid's Production prerequisites — long-lead owner tasks; history depth
+  (`days_requested`) is fixed at first link; a CloudFront content-security policy (Slice 8) must
+  allow `cdn.plaid.com`.
+- Sandbox Items expire into a re-login state after about 30 days by design, so the reconnect
+  ("update mode") path is unbuilt but will be needed for Production.
+
+---
+
 <!-- Copy the ADR block above for each new decision. Keep them append-only. -->

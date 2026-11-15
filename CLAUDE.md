@@ -54,8 +54,14 @@ _Approved 2026-07-13 (architecture doc v1.1; ADR-001…009 all Accepted):_
   cycle-keyed budgets (ADR-005) · `USER#<sub>` partition scoping, multi-tenant-ready
   (ADR-006) · Cognito + API Gateway HTTP API JWT authorizer (ADR-007).
 - **AI pipeline:** SQS + DLQ (ADR-009) → categorizer Lambda → merchant rules first, then
-  Claude Sonnet 4.6 via Amazon Bedrock with structured output (ADR-008 as amended). **Zero runtime
-  secrets** — everything is IAM-role auth.
+  Claude Sonnet 4.6 via Amazon Bedrock with structured output (ADR-008 as amended). AWS services
+  are all IAM-role auth; **the only runtime secrets are Plaid's** (below).
+- **Plaid ingest (ADR-014, `dev` stage only, Sandbox only):** `POST /plaid/link-token` ·
+  `/plaid/exchange` · `/plaid/sync` → `api_plaid` Lambda → async `plaid_sync` worker →
+  ordinary `TXN#` items + the same categorization queue. Secrets Manager holds
+  `ledgerly/dev/plaid/api-keys` (owner-created by hand, referenced by name only) and
+  `ledgerly/dev/plaid/access-tokens` (stack-created, written by `api_plaid`). `prod` synthesizes
+  with no Plaid resources.
 - **Key data-model idea:** everything keyed by user + budget cycle (`M#2026-07` /
   `B#2026-07-10`); cycle windows derived from settings, so cadence changes never rewrite
   history. Diagram: `docs/ledgerly-architecture-diagram.png` (regenerate via
@@ -100,9 +106,10 @@ _Installed 2026-08-03. Upstream rules adapted — where they conflicted with ADR
 - **Infrastructure is CDK, always** (NFR-5.1). The MCP server can create resources directly;
   it must not. Reads and diagnosis via MCP/CLI are fine — anything that changes infrastructure
   goes through `infra/` and the pipeline.
-- **Secrets:** Ledgerly is zero-runtime-secrets by design (all IAM-role auth), so no
-  Secrets Manager reads should ever be needed. If that changes, it needs an ADR first — do not
-  fetch secret values into context.
+- **Secrets:** the only runtime secrets are Plaid's two Secrets Manager secrets (ADR-014).
+  **Never fetch a secret value into context** — no `GetSecretValue`, no printing `.env`.
+  Describing a secret (name, existence, last-changed date) is fine. Any *new* secret needs an
+  ADR first.
 - Avoid em dashes in AWS resource names and descriptions; use hyphens.
 
 ## Browser tooling (Playwright MCP)
@@ -271,6 +278,23 @@ _Solidified at the end of Slice 1. Binding:_
   Expected steady state ≈ $2–4/month total.
 
 ## Current build phase
+
+**Slice 9 — Plaid Sandbox ingest: 🔨 BACKEND BUILT (2026-11-15), PR open, NOT deployed, NOT run
+against Plaid.** ADR-014 Accepted (pending counts toward "spent"). Built: `core/plaid_normalize.py`
+(sign flip, null merchant, pending), `core/plaid_sync.py` (buffer-all-pages loop that restarts
+from the starting cursor on `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION`; plan that merges
+posted-before-removed), `core/plaid_items.py`, `adapters/plaid.py` (stdlib `urllib`, Sandbox host
+only, keys in headers), `adapters/secrets.py`, `adapters/lambda_invoke.py`, Plaid writes in
+`adapters/dynamo.py` (row + `PLAIDTXN#` pointer always in one transaction), `functions/api_plaid`,
+`functions/plaid_sync`, `PlaidConstruct`. `summarize` reports `pendingSpentCents`. Review fixes (2026-11-15): `apply_categorization`
+requires the row to still exist; the connection record is written right after the token and the
+exchange is never retried; cancelled DynamoDB transactions are only "already exists" on a real
+condition failure; a `plaid-sync-failed` on-failure Lambda; CI asserts prod has no Plaid
+resources (`infra/check_prod_has_no_plaid.py`). 314 backend tests. **Outstanding:** owner creates the API-keys secret · deploy · run one Sandbox sync with
+`user_transactions_dynamic` (the `sandbox_link` / `sandbox_refresh` direct-invoke actions on
+`ledgerly-dev-api-plaid` exist for this) · SPA "Bank connection" panel · `/item/remove` ·
+architecture §1.2/§1.3/§2.4/§2.5 prose. `PLAID_PLAN.md` is the Plaid build-kit state file.
+_The Slice 6 notes below predate this and have not been re-verified here._
 
 **Slice 6 — budgets & at-a-glance dashboard: 🔨 CODE-COMPLETE (2026-08-07), PR open, NOT yet
 verified live. Slice 5 ✅ complete (2026-08-03).**

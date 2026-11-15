@@ -191,5 +191,6 @@ def test_empty_cycle_produces_zero_totals_not_an_error():
         "moneyInCents": 0, "moneyOutCents": 0, "netCents": 0, "budgetedCents": 0,
         "spentAgainstBudgetCents": 0, "remainingCents": 0,
         "transactionCount": 0, "uncategorizedCount": 0,
+        "pendingSpentCents": 0, "pendingCount": 0,
     }
     assert result["cycle"] == CYCLE

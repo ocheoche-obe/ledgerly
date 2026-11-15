@@ -15,6 +15,8 @@ any Lambda runs — architecture §3.5):
                              → cycles Lambda (dashboard read, AP 4+6 / FR-5.1)
   PUT       /cycles/{cycleRef}/budgets/{categoryId}
                              → cycles Lambda (set/clear a budget, AP 5 / FR-4.3)
+  POST      /plaid/link-token, /plaid/exchange, /plaid/sync
+                             → Plaid Lambda (bank connection + sync, ADR-014) — dev only
 
 Each Lambda gets least privilege: read/write on the one table only — nothing else, no `*`
 resources (NFR-4.4). The imports Lambda additionally gets `s3:PutObject` on the upload bucket
@@ -59,6 +61,7 @@ class ApiConstruct(Construct):
         user_pool: cognito.IUserPool,
         user_pool_client: cognito.IUserPoolClient,
         allowed_origins: list[str],
+        plaid_fn: _lambda.IFunction | None = None,
     ):
         super().__init__(scope, construct_id)
 
@@ -195,6 +198,22 @@ class ApiConstruct(Construct):
             ),
             authorizer=authorizer,
         )
+
+        # Plaid routes (ADR-014) — only in a stage that has the Plaid construct (dev). The
+        # Lambda and its secret access live in PlaidConstruct; this only exposes it, behind
+        # the same JWT authorizer as every other route.
+        if plaid_fn is not None:
+            for path, name in (
+                ("/plaid/link-token", "PlaidLinkTokenIntegration"),
+                ("/plaid/exchange", "PlaidExchangeIntegration"),
+                ("/plaid/sync", "PlaidSyncIntegration"),
+            ):
+                self.http_api.add_routes(
+                    path=path,
+                    methods=[apigwv2.HttpMethod.POST],
+                    integration=integrations.HttpLambdaIntegration(name, plaid_fn),
+                    authorizer=authorizer,
+                )
 
     def _api_lambda(
         self,

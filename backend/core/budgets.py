@@ -98,12 +98,20 @@ def summarize(
 
     net_by_cat: dict[str | None, int] = {}
     count_by_cat: dict[str | None, int] = {}
+    # Pending charges (Plaid, ADR-014) count toward spend like any other transaction; these
+    # two tallies only record *how much* of each figure is still provisional, so the
+    # dashboard can say so. They never change a total.
+    pending_net_by_cat: dict[str | None, int] = {}
+    pending_count = 0
     money_in = money_out = 0
     for txn in transactions:
         amount = int(txn["amountCents"])
         cat_id = txn.get("categoryId")  # None → the Uncategorized row
         net_by_cat[cat_id] = net_by_cat.get(cat_id, 0) + amount
         count_by_cat[cat_id] = count_by_cat.get(cat_id, 0) + 1
+        if txn.get("pending"):
+            pending_net_by_cat[cat_id] = pending_net_by_cat.get(cat_id, 0) + amount
+            pending_count += 1
         if amount >= 0:
             money_in += amount
         else:
@@ -124,6 +132,7 @@ def summarize(
             net_cents=net_by_cat.get(cat_id, 0),
             count=count_by_cat.get(cat_id, 0),
             archived=not active,
+            pending_net_cents=pending_net_by_cat.get(cat_id, 0),
         ))
 
     if None in net_by_cat:
@@ -134,6 +143,7 @@ def summarize(
             net_cents=net_by_cat[None],
             count=count_by_cat[None],
             archived=False,
+            pending_net_cents=pending_net_by_cat.get(None, 0),
         ))
 
     budgeted = sum(budget_by_cat.values())
@@ -152,6 +162,9 @@ def summarize(
             "remainingCents": budgeted - spent_against_budget,
             "transactionCount": len(transactions),
             "uncategorizedCount": count_by_cat.get(None, 0),
+            # Already included in the figures above — the part of them that is not final yet.
+            "pendingSpentCents": -sum(pending_net_by_cat.values()),
+            "pendingCount": pending_count,
         },
     }
 
@@ -164,6 +177,7 @@ def _row(
     net_cents: int,
     count: int,
     archived: bool,
+    pending_net_cents: int = 0,
 ) -> dict:
     spent = -net_cents  # money out is positive spend; refunds net it down
     return {
@@ -171,6 +185,8 @@ def _row(
         "name": name,
         "budgetCents": budget_cents,
         "spentCents": spent,
+        # The part of spentCents that comes from pending charges (same sign convention).
+        "pendingSpentCents": -pending_net_cents,
         "netCents": net_cents,
         "transactionCount": count,
         "remainingCents": None if budget_cents is None else budget_cents - spent,

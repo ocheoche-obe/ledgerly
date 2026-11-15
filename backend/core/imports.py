@@ -50,14 +50,49 @@ def new_import(import_id: str, *, filename: str, account_label: str, account_id:
     }
 
 
+SOURCE_CSV = "csv"
+SOURCE_PLAID = "plaid"
+
+
+def new_sync_import(import_id: str, *, item_id: str, institution_name: str,
+                    created_at: str) -> dict:
+    """The record of one Plaid sync (ADR-014) — an import whose source is a bank connection
+    rather than a file, so the existing import report and status polling serve it unchanged.
+
+    It starts ``pending`` and is advanced by the sync worker. Beyond the CSV counts it carries
+    ``modified`` and ``removed``, which a file import can never produce; ``duplicate`` counts
+    rows Plaid sent that needed no write.
+    """
+    return {
+        "type": "IMPORT",
+        "importId": import_id,
+        "source": SOURCE_PLAID,
+        "plaidItemId": item_id,
+        "filename": f"Plaid sync - {institution_name}" if institution_name else "Plaid sync",
+        "accountLabel": institution_name,
+        "accountId": "",
+        "status": STATUS_PENDING,
+        "added": 0,
+        "modified": 0,
+        "removed": 0,
+        "duplicate": 0,
+        "failed": 0,
+        "errors": [],
+        "createdAt": created_at,
+    }
+
+
 def import_view(item: dict) -> dict:
     """Owner-facing projection — drops key attributes, coerces DynamoDB numbers to int."""
     return {
         "importId": item["importId"],
         "filename": item.get("filename", ""),
         "accountLabel": item.get("accountLabel", ""),
+        "source": item.get("source", SOURCE_CSV),
         "status": item.get("status", STATUS_PENDING),
         "added": int(item.get("added", 0)),
+        "modified": int(item.get("modified", 0)),
+        "removed": int(item.get("removed", 0)),
         "duplicate": int(item.get("duplicate", 0)),
         "failed": int(item.get("failed", 0)),
         "errors": list(item.get("errors", [])),

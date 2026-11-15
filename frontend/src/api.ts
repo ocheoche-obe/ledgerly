@@ -64,7 +64,8 @@ export interface Transaction {
   date: string; // YYYY-MM-DD
   amountCents: number; // signed: negative = debit
   direction: TxnDirection;
-  balanceCents: number;
+  /** Null on Plaid rows: Plaid supplies no running balance (ADR-014). */
+  balanceCents: number | null;
   accountId: string;
   descriptionRaw: string;
   merchantNormalized: string;
