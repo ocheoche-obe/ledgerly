@@ -22,7 +22,7 @@ import csv
 import hashlib
 import io
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 CHASE_CHECKING = "chase_checking"
@@ -89,7 +89,11 @@ def _normalize_chase_row(row: dict, *, account_id: str) -> dict:
     try:
         # A statement's posting date is a bank-local calendar date, not an instant: there is
         # no zone in the export to parse, and the time part is discarded immediately anyway.
-        iso_date = datetime.strptime(posting_date, "%m/%d/%Y").date().isoformat()  # noqa: DTZ007
+        # The explicit UTC tag changes nothing about the result; it replaces a `noqa: DTZ007`
+        # that ruff 0.17 reports as unused (RUF100) while ruff 0.16 still requires it, so
+        # this line lints clean under both.
+        parsed = datetime.strptime(posting_date, "%m/%d/%Y").replace(tzinfo=UTC)
+        iso_date = parsed.date().isoformat()
     except ValueError as err:
         raise ValueError(f"invalid date: {posting_date!r} (expected MM/DD/YYYY)") from err
 
