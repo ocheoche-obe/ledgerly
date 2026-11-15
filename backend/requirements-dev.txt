@@ -7,7 +7,7 @@
 # rule set, put 31 new violations on an untouched `main`, and reddened all nine open PRs at
 # once (including ones that touched no Python). Dependabot still proposes every bump; the
 # bound only forces it to arrive as one reviewable PR instead of a silent Tuesday breakage.
-pytest>=9.1.1,<9.2
+pytest>=9.2.0,<9.3
 # Ruff is pre-1.0: minor releases may change the default rule set, which *is* the gate here
 # (ruff.toml selects no explicit rule list). Keep this bound tight and bump deliberately.
 ruff>=0.16.0,<0.17
