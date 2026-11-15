@@ -82,6 +82,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | 🔨 started 2026-08-07 — **includes [B-7]** (recategorize endpoint) as its first task, owner-approved 2026-08-03 | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
+| 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | 🔨 started 2026-11-15 — ADR-014 Accepted | — |
 
 > Slicing rationale: Slice 1 is the **thinnest end-to-end proof** that the whole stack
 > works deployed (the kit's rule) — thinner than the interview candidate ("CSV upload →
@@ -646,6 +647,34 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
 - **Exit criteria:** ☐ owner completes a real cycle ritual on prod ☐ evaluation doc
   live with first metrics ☐ retrospective beat done ☐ docs + CLAUDE.md phase marker
   flipped to "v1 in real use — evaluation running".
+- **Completion notes:** _—_
+
+### Slice 9 — Plaid Sandbox ingest 🔨 (proposed 2026-11-14, started 2026-11-15; runs before Slice 7)
+
+- **Goal:** link a Plaid Sandbox bank from the SPA, sync its transactions into the existing
+  pipeline, and see them categorized on the dashboard — with nothing downstream of ingest changed.
+- **Key refs:** ADR-014 (Accepted 2026-11-15) · architecture §1.2 (Ingest seam), §1.3, §4.3 · ADR-012 ·
+  `PLAID_PLAN.md` (Plaid build-kit state: human tasks, test steps).
+- **Scope in:** `api_plaid` Lambda (`POST /plaid/link-token`, `/plaid/exchange`, `/plaid/sync`) ·
+  `plaid_sync` worker · `adapters/plaid.py` (stdlib HTTP) + `core/plaid_normalize.py` · two
+  Secrets Manager secrets · `PLAIDITEM#` / `PLAIDTXN#` items · sync recorded as an `IMPORT#` ·
+  added / modified / removed handling · **pending transactions** stored, flagged, counted in spend
+  with a pending amount in the cycle summary, and merged into their posted row · "Bank
+  connection" panel (connect, Sync now, accounts with last-synced balance) · `dev` stage only.
+- **Scope out:** Plaid Production and any real bank · webhooks and schedules · reconnect (update
+  mode) · OAuth redirect handling · Enrich, Balance, Identity calls · CSV/Plaid cross-source
+  dedupe · any change to the categorizer or cycles; budgets and dashboard change only to carry
+  and show the pending amount.
+- **Decisions (owner, 2026-11-15):** ADR-014 accepted as written — Secrets Manager · dedupe/
+  mutation rules · "Sync now" trigger · CSV stays · pending transactions count toward "spent" ·
+  Sandbox rows share the `dev` table, tagged for purge.
+- **Exit criteria (all against the deployed `dev` stack):** ☐ link First Platypus Bank with
+  Plaid's test login from the SPA ☐ first sync lands transactions, they categorize, and they show
+  on the dashboard ☐ a second sync adds 0 ☐ added, modified and removed each exercised with
+  Plaid's dynamic-transactions test user, with a category correction surviving a `modified`
+  ☐ access token and API keys appear in no log line, no API response and no table item ☐ `prod`
+  synth contains no Plaid resources ☐ month-to-date bill checked ☐ docs current (architecture
+  §1.2/§1.3/§2.4/§2.5/§4.3, diagram re-rendered, ADR-014 → Accepted).
 - **Completion notes:** _—_
 
 ---
