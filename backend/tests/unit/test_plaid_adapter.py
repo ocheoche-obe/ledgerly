@@ -247,3 +247,37 @@ def test_access_tokens_round_trip_and_are_scoped_to_their_owner(secrets):
     assert module.get_access_token("sub-1", "nope") is None
     stored = json.loads(sm.get_secret_value(SecretId=TOKENS_SECRET)["SecretString"])
     assert set(stored["items"]) == {"item-1", "item-2"}
+
+
+def test_update_mode_link_token_sends_the_access_token_and_no_products():
+    client, transport = make_client((200, {"link_token": "x"}))
+    client.link_token_create(client_user_id="sub-1", access_token=ACCESS_TOKEN)
+    body = body_of(transport.requests[0])
+    assert body["access_token"] == ACCESS_TOKEN
+    # Products in update mode would ask for extra consent instead of repairing the login.
+    assert "products" not in body
+    assert "additional_consented_products" not in body
+    assert body["user"] == {"client_user_id": "sub-1"}
+
+
+def test_item_remove_and_reset_login_use_the_documented_shapes():
+    client, transport = make_client((200, {"request_id": "r1"}), (200, {"reset_login": True}))
+    client.item_remove(access_token=ACCESS_TOKEN)
+    client.sandbox_item_reset_login(access_token=ACCESS_TOKEN)
+    remove, reset = transport.requests
+    assert remove.full_url.endswith("/item/remove")
+    assert body_of(remove) == {"access_token": ACCESS_TOKEN}
+    assert reset.full_url.endswith("/sandbox/item/reset_login")
+    assert body_of(reset) == {"access_token": ACCESS_TOKEN}
+
+
+def test_deleting_an_access_token_is_scoped_to_its_owner(secrets):
+    module, _ = secrets
+    module.store_access_token("sub-1", "item-1", ACCESS_TOKEN)
+    module.store_access_token("sub-1", "item-2", "other-token")
+    assert module.delete_access_token("someone-else", "item-1") is False
+    assert module.get_access_token("sub-1", "item-1") == ACCESS_TOKEN
+    assert module.delete_access_token("sub-1", "item-1") is True
+    assert module.get_access_token("sub-1", "item-1") is None
+    assert module.get_access_token("sub-1", "item-2") == "other-token"
+    assert module.delete_access_token("sub-1", "item-1") is False

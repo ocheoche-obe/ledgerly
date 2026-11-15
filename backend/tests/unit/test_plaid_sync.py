@@ -69,10 +69,25 @@ class FakePlaid:
         self.sync_cursors: list[str] = []
         self.exchanged: list[str] = []
         self.refreshed: list[str] = []
+        self.link_token_access: list[str | None] = []
+        self.removed_items: list[str] = []
+        self.reset_logins: list[str] = []
+        self.remove_error: PlaidError | None = None
 
-    def link_token_create(self, *, client_user_id):
+    def link_token_create(self, *, client_user_id, access_token=None):
+        self.link_token_access.append(access_token)
         return {"link_token": "link-sandbox-123", "expiration": "2026-11-15T12:00:00Z",
                 "request_id": "req-link"}
+
+    def item_remove(self, *, access_token):
+        if self.remove_error is not None:
+            raise self.remove_error
+        self.removed_items.append(access_token)
+        return {"request_id": "req-remove"}
+
+    def sandbox_item_reset_login(self, *, access_token):
+        self.reset_logins.append(access_token)
+        return {"reset_login": True, "request_id": "req-reset"}
 
     def item_public_token_exchange(self, *, public_token):
         self.exchanged.append(public_token)
@@ -106,9 +121,11 @@ class Env:
         self.queue_url, self.started = queue_url, started
         self.table = boto3.resource("dynamodb", region_name="us-east-1").Table(TABLE_NAME)
 
-    def api_call(self, path, body=None, *, sub=SUB):
-        event = {"requestContext": {"http": {"method": "POST", "path": path}},
+    def api_call(self, path, body=None, *, sub=SUB, method="POST", path_params=None):
+        event = {"requestContext": {"http": {"method": method, "path": path}},
                  "body": json.dumps(body or {})}
+        if path_params:
+            event["pathParameters"] = path_params
         if sub:
             event["requestContext"]["authorizer"] = {"jwt": {"claims": {"sub": sub}}}
         response = self.api.handler(event, None)
@@ -222,7 +239,8 @@ def test_requests_without_a_verified_identity_are_rejected(env):
 def test_link_token_is_returned_to_the_browser(env):
     status, body, _ = env.api_call("/plaid/link-token")
     assert status == 200
-    assert body == {"linkToken": "link-sandbox-123", "expiration": "2026-11-15T12:00:00Z"}
+    assert body == {"linkToken": "link-sandbox-123", "expiration": "2026-11-15T12:00:00Z",
+                    "mode": "link"}
 
 
 def test_exchange_requires_a_public_token(env):
@@ -276,7 +294,7 @@ def test_a_repeated_exchange_keeps_the_existing_item_and_its_cursor(env):
 
 
 def test_plaid_errors_surface_as_502_with_the_code_and_request_id(env):
-    def fail(*, client_user_id):
+    def fail(*, client_user_id, access_token=None):
         raise PlaidError(error_type="INVALID_INPUT", error_code="INVALID_API_KEYS",
                          request_id="req-9", status=400, endpoint="/link/token/create")
 
@@ -772,3 +790,133 @@ def test_the_failure_handler_never_overwrites_a_finished_import_or_invents_one(e
     assert on_failure.handler(destination_event(ghost), None) == {"marked": False}
     assert env.dynamo.get_import(SUB, "no-such-import") is None
     assert on_failure.handler({"requestPayload": "garbage"}, None) == {"marked": False}
+
+
+# --- connections panel: list, reconnect (update mode), disconnect --------------------------
+
+
+def login_required() -> PlaidError:
+    return PlaidError(error_type="ITEM_ERROR", error_code="ITEM_LOGIN_REQUIRED",
+                      request_id="req-login", status=400, endpoint="/transactions/sync")
+
+
+def tokens_document() -> dict:
+    return json.loads(boto3.client("secretsmanager", region_name="us-east-1").get_secret_value(
+        SecretId=TOKENS_SECRET)["SecretString"])
+
+
+def test_connections_are_listed_with_accounts_and_last_sync_and_no_secrets(env):
+    env.link()
+    env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    status, body, raw = env.api_call("/plaid/items", method="GET")
+    assert status == 200
+    [item] = body["items"]
+    assert item["itemId"] == ITEM_ID
+    assert item["institutionName"] == "First Platypus Bank"
+    assert item["accounts"][0]["balanceCurrentCents"] == 11000
+    assert item["lastSyncedAt"]
+    assert (item["errorCode"], item["needsReconnect"]) == ("", False)
+    assert ACCESS_TOKEN not in raw
+    assert "cursor" not in item
+
+
+def test_connections_are_only_ever_the_callers_own(env):
+    env.link()
+    status, body, _ = env.api_call("/plaid/items", method="GET", sub="someone-else")
+    assert (status, body) == (200, {"items": []})
+
+
+def test_a_broken_login_is_recorded_offered_a_reconnect_and_cleared_by_the_next_sync(env):
+    env.link()
+    _, record = env.run_worker(login_required())
+    assert record["status"] == "failed"
+    [item] = env.api_call("/plaid/items", method="GET")[1]["items"]
+    assert (item["errorCode"], item["needsReconnect"]) == ("ITEM_LOGIN_REQUIRED", True)
+
+    # The owner logs in again through Link in update mode; then syncs.
+    env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
+    [item] = env.api_call("/plaid/items", method="GET")[1]["items"]
+    assert (item["errorCode"], item["needsReconnect"]) == ("", False)
+
+
+def test_a_transient_failure_is_not_recorded_as_a_connection_problem(env):
+    env.link()
+    env.run_worker(PlaidError(error_type="INSTITUTION_ERROR", error_code="INSTITUTION_DOWN",
+                              request_id="r", status=400, endpoint="/transactions/sync"))
+    [item] = env.api_call("/plaid/items", method="GET")[1]["items"]
+    assert item["errorCode"] == ""
+
+
+def test_update_mode_link_token_uses_the_stored_access_token_server_side(env):
+    env.link()
+    status, body, raw = env.api_call("/plaid/link-token", {"itemId": ITEM_ID})
+    assert status == 200
+    assert body["mode"] == "update"
+    assert env.plaid.link_token_access[-1] == ACCESS_TOKEN
+    assert ACCESS_TOKEN not in raw
+
+
+def test_update_mode_for_someone_elses_or_an_unknown_connection_is_404(env):
+    env.link()
+    assert env.api_call("/plaid/link-token", {"itemId": ITEM_ID}, sub="someone-else")[0] == 404
+    assert env.api_call("/plaid/link-token", {"itemId": "nope"})[0] == 404
+    assert env.plaid.link_token_access == []
+
+
+def test_disconnect_removes_at_plaid_then_forgets_the_token_and_record_but_keeps_history(env):
+    env.link()
+    env.run_worker(page(added=[txn("t1"), txn("t2")], next_cursor="c1"))
+    status, body, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE",
+                                   path_params={"itemId": ITEM_ID})
+    assert (status, body) == (200, {"itemId": ITEM_ID, "disconnected": True})
+    assert env.plaid.removed_items == [ACCESS_TOKEN]
+    assert ITEM_ID not in tokens_document()["items"]
+    assert env.dynamo.get_plaid_item(SUB, ITEM_ID) is None
+    assert set(env.txns()) == {"t1", "t2"}  # spending history is not deleted by a disconnect
+
+
+def test_a_failed_plaid_remove_changes_nothing_so_disconnect_can_be_retried(env):
+    env.link()
+    env.plaid.remove_error = PlaidError(error_type="API_ERROR", error_code="INTERNAL_SERVER_ERROR",
+                                        request_id="r", status=500, endpoint="/item/remove")
+    status, _, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE",
+                                path_params={"itemId": ITEM_ID})
+    assert status == 502
+    assert ITEM_ID in tokens_document()["items"]
+    assert env.dynamo.get_plaid_item(SUB, ITEM_ID) is not None
+
+
+def test_an_item_already_gone_at_plaid_still_finishes_the_cleanup(env):
+    env.link()
+    env.plaid.remove_error = PlaidError(error_type="ITEM_ERROR", error_code="ITEM_NOT_FOUND",
+                                        request_id="r", status=400, endpoint="/item/remove")
+    status, _, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE",
+                                path_params={"itemId": ITEM_ID})
+    assert status == 200
+    assert ITEM_ID not in tokens_document()["items"]
+    assert env.dynamo.get_plaid_item(SUB, ITEM_ID) is None
+
+
+def test_disconnecting_someone_elses_connection_is_404_and_touches_nothing(env):
+    env.link()
+    status, _, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE",
+                                path_params={"itemId": ITEM_ID}, sub="someone-else")
+    assert status == 404
+    assert env.plaid.removed_items == []
+    assert ITEM_ID in tokens_document()["items"]
+
+
+def test_after_a_disconnect_the_same_bank_can_be_linked_again(env):
+    env.link()
+    env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE", path_params={"itemId": ITEM_ID})
+    status, _, _ = env.api_call("/plaid/exchange", {
+        "publicToken": "public-sandbox-again", "institution": {"id": "ins_109508"}})
+    assert status == 201
+
+
+def test_sandbox_reset_login_is_a_direct_invocation_only_action(env):
+    env.link()
+    result = env.api.handler({"action": "sandbox_reset_login", "sub": SUB, "itemId": ITEM_ID},
+                             None)
+    assert result["ok"] is True
+    assert env.plaid.reset_logins == [ACCESS_TOKEN]

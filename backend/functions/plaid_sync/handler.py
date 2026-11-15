@@ -45,6 +45,7 @@ from adapters.dynamo import (
     merge_pending_transaction,
     save_plaid_sync_state,
     set_import_status,
+    set_plaid_item_error,
     update_plaid_transaction,
 )
 from adapters.plaid import PlaidClient, PlaidError, is_mutation_during_pagination
@@ -92,6 +93,15 @@ def handler(event: dict, context) -> dict:
             "outcome": "failed", "reason": message, **plaid_fields,
         }))
         set_import_status(sub, import_id, STATUS_FAILED, errors=[{"error": message}])
+        if isinstance(err, PlaidError) and not err.retryable:
+            # Shown on the connections panel; ITEM_LOGIN_REQUIRED there offers "Reconnect".
+            # Transient errors are not recorded: they clear on their own.
+            try:
+                set_plaid_item_error(sub, item_id, error_code=err.error_code,
+                                     at=datetime.now(UTC).isoformat())
+            except Exception:
+                logger.exception(json.dumps({"stage": "plaid_sync", "itemId": item_id,
+                                             "err": "could not record the item error"}))
         return {"status": STATUS_FAILED, "importId": import_id}
     return {"status": STATUS_COMPLETE, "importId": import_id, **counts}
 

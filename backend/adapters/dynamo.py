@@ -624,7 +624,10 @@ def save_plaid_sync_state(
     try:
         _table.update_item(
             Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
-            UpdateExpression="SET #c = :cursor, accounts = :accounts, lastSyncedAt = :at",
+            # A sync that got this far reached Plaid with a working login, so any error
+            # recorded by an earlier failed sync (e.g. ITEM_LOGIN_REQUIRED) no longer holds.
+            UpdateExpression="SET #c = :cursor, accounts = :accounts, lastSyncedAt = :at "
+                             "REMOVE errorCode, errorAt",
             ConditionExpression="#c = :previous",
             ExpressionAttributeNames={"#c": "cursor"},
             ExpressionAttributeValues={
@@ -639,6 +642,33 @@ def save_plaid_sync_state(
         if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return False
         raise
+
+
+def set_plaid_item_error(sub: str, item_id: str, *, error_code: str, at: str) -> None:
+    """Record the Plaid error that stopped a sync, so the connections panel can say what is
+    wrong (and offer a reconnect when that is the fix). Cleared by the next successful sync.
+    A no-op if the Item was disconnected in the meantime."""
+    try:
+        _table.update_item(
+            Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
+            UpdateExpression="SET errorCode = :code, errorAt = :at",
+            ConditionExpression="attribute_exists(sk)",
+            ExpressionAttributeValues={":code": error_code, ":at": at},
+        )
+    except ClientError as err:
+        if err.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+
+def delete_plaid_item(sub: str, item_id: str) -> bool:
+    """Delete a disconnected Item's record. Its transactions are deliberately left alone —
+    they are spending history, and removing them is a separate, owner-approved purge
+    (ADR-014: every Plaid row is tagged with its source and Item for exactly that)."""
+    response = _table.delete_item(
+        Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
+        ReturnValues="ALL_OLD",
+    )
+    return "Attributes" in response
 
 
 def get_plaid_txn_date(sub: str, transaction_id: str) -> str | None:

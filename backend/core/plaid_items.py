@@ -109,9 +109,24 @@ def new_plaid_item(
     }
 
 
+# Plaid error codes on an Item that the owner fixes by logging in again through Link in
+# update mode. Other errors (an institution outage, a rate limit) clear on their own, and
+# re-linking would not help them, so they are shown but not offered a "Reconnect" button.
+RECONNECT_ERROR_CODES = frozenset({
+    "ITEM_LOGIN_REQUIRED",  # the bank login broke or expired (Sandbox Items do this at ~30 days)
+    "PENDING_EXPIRATION",   # consent about to expire
+    "PENDING_DISCONNECT",   # the institution is about to drop the connection
+})
+
+
 def plaid_item_view(item: dict) -> dict:
     """Owner-facing projection. Deliberately omits the cursor (internal) — and there is no
-    token on the record to omit."""
+    token on the record to omit.
+
+    ``errorCode`` is the Plaid error from the most recent failed sync, cleared by the next
+    successful one; ``needsReconnect`` says whether Link's update mode is the fix.
+    """
+    error_code = item.get("errorCode") or ""
     accounts = []
     for a in item.get("accounts", []):
         view = dict(a)
@@ -127,4 +142,7 @@ def plaid_item_view(item: dict) -> dict:
         "plaidEnv": item.get("plaidEnv", ""),
         "createdAt": item.get("createdAt", ""),
         "lastSyncedAt": item.get("lastSyncedAt", ""),
+        "errorCode": error_code,
+        "errorAt": item.get("errorAt", "") if error_code else "",
+        "needsReconnect": error_code in RECONNECT_ERROR_CODES,
     }

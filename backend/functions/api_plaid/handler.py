@@ -3,7 +3,14 @@
 Thin handler (architecture §5.2): identity from verified JWT claims only (FR-1.3).
 
 Routes (all authorized by the API Gateway JWT authorizer):
-  POST /plaid/link-token  → {linkToken, expiration}   a short-lived token for Plaid Link
+  POST /plaid/link-token  {itemId?} → {linkToken, expiration, mode}   a short-lived token
+                          for Plaid Link; with an itemId it opens Link in *update mode* to
+                          repair that connection's login (mode "update"), else a new link
+  GET  /plaid/items       → {items: [...]}   connected institutions, accounts, last sync,
+                          and any error from the last failed sync (needsReconnect)
+  DELETE /plaid/items/{itemId} → {itemId, disconnected: true}   ends the connection at Plaid
+                          (/item/remove), forgets the token, deletes the record; the synced
+                          transactions are kept (they are history; purging them is separate)
   POST /plaid/exchange    {publicToken, institution?: {id, name}, linkSessionId?}
                           → the new connection (institution + accounts) and the import ID of
                             its first sync
@@ -20,6 +27,7 @@ takes AWS credentials for this account) and only while ``PLAID_ENV`` is ``sandbo
 
     {"action": "sandbox_link", "sub": "...", "institutionId"?, "username"?, "password"?}
     {"action": "sandbox_refresh", "sub": "...", "itemId": "..."}
+    {"action": "sandbox_reset_login", "sub": "...", "itemId": "..."}   → ITEM_LOGIN_REQUIRED
 """
 from __future__ import annotations
 
@@ -30,6 +38,7 @@ from datetime import UTC, datetime
 
 from adapters.dynamo import (
     create_sync_import,
+    delete_plaid_item,
     get_plaid_item,
     list_plaid_items,
     put_plaid_item,
@@ -40,6 +49,7 @@ from adapters.lambda_invoke import start_plaid_sync
 from adapters.plaid import PlaidClient, PlaidConfigError, PlaidError
 from adapters.secrets import (
     SecretConfigError,
+    delete_access_token,
     get_access_token,
     get_plaid_credentials,
     store_access_token,
@@ -53,7 +63,10 @@ logger.setLevel(logging.INFO)
 
 _plaid: PlaidClient | None = None
 
-_ROUTES = frozenset({"POST /plaid/link-token", "POST /plaid/exchange", "POST /plaid/sync"})
+_ROUTES = frozenset({
+    "POST /plaid/link-token", "POST /plaid/exchange", "POST /plaid/sync", "GET /plaid/items",
+})
+_ITEM_PREFIX = "/plaid/items/"
 
 # Plaid's Sandbox bank that accepts the special test users (non-OAuth).
 _SANDBOX_DEFAULT_INSTITUTION = "ins_109508"  # First Platypus Bank
@@ -82,12 +95,19 @@ def handler(event: dict, context) -> dict:
         logger.warning(json.dumps({"route": "/plaid", "outcome": "no_sub"}))
         return _response(401, {"message": "Unauthorized"})
 
-    route = f"{_method(event)} {_path(event)}"
-    if route not in _ROUTES:
+    method, path = _method(event), _path(event)
+    route = f"{method} {path}"
+    item_route = method == "DELETE" and path.startswith(_ITEM_PREFIX)
+    if route not in _ROUTES and not item_route:
         return _response(404, {"message": "Not found"})
     try:
+        if item_route:
+            route = "DELETE /plaid/items/{itemId}"
+            return _disconnect(sub, _item_id_param(event, path))
+        if route == "GET /plaid/items":
+            return _list_items(sub)
         if route == "POST /plaid/link-token":
-            return _link_token(sub)
+            return _link_token(sub, _parse_body(event))
         if route == "POST /plaid/exchange":
             return _exchange(sub, _parse_body(event))
         return _sync(sub, _parse_body(event))
@@ -115,17 +135,72 @@ def handler(event: dict, context) -> dict:
 # --- routes -----------------------------------------------------------------------------
 
 
-def _link_token(sub: str) -> dict:
+def _link_token(sub: str, body: dict) -> dict:
+    item_id = body.get("itemId")
+    if item_id is not None and not isinstance(item_id, str):
+        raise ValueError("itemId must be a string")
+
+    access_token = None
+    if item_id:
+        # Update mode: repair an existing connection's login. Scoped to the caller twice over
+        # - the record is read from their partition and the token lookup checks their sub.
+        if get_plaid_item(sub, item_id) is None:
+            return _response(404, {"message": "bank connection not found"})
+        access_token = get_access_token(sub, item_id)
+        if access_token is None:
+            return _response(409, {"message": "this connection has no stored access; "
+                                              "disconnect it and connect the bank again"})
+
     # The Cognito sub is the stable, non-personal user ID Plaid asks for.
-    result = _client().link_token_create(client_user_id=sub)
+    result = _client().link_token_create(client_user_id=sub, access_token=access_token)
     logger.info(json.dumps({
-        "route": "POST /plaid/link-token", "sub": sub,
-        "plaidRequestId": result.get("request_id", ""),
+        "route": "POST /plaid/link-token", "sub": sub, "mode": "update" if item_id else "link",
+        "itemId": item_id or "", "plaidRequestId": result.get("request_id", ""),
     }))
     return _response(200, {
         "linkToken": result["link_token"],
         "expiration": result.get("expiration", ""),
+        "mode": "update" if item_id else "link",
     })
+
+
+def _list_items(sub: str) -> dict:
+    items = sorted(list_plaid_items(sub), key=lambda i: i.get("createdAt", ""))
+    return _response(200, {"items": [plaid_item_view(i) for i in items]})
+
+
+def _disconnect(sub: str, item_id: str) -> dict:
+    """End a connection: at Plaid first, then our token, then our record.
+
+    The order is what makes a partial failure safe to retry. If ``/item/remove`` fails,
+    nothing of ours has changed and the owner can press Disconnect again. If it succeeds and a
+    later step fails, a retry finds Plaid answering ``ITEM_NOT_FOUND`` - which means "already
+    removed" - and finishes the cleanup. Deleting our record first would orphan a live,
+    billable Item whose token nobody could find any more.
+
+    Transactions are kept: they are spending history, and purging Sandbox rows is a separate
+    owner decision (ADR-014 tags every Plaid row with its Item for that).
+    """
+    if not item_id:
+        raise ValueError("itemId is required")
+    if get_plaid_item(sub, item_id) is None:
+        return _response(404, {"message": "bank connection not found"})
+
+    access_token = get_access_token(sub, item_id)
+    request_id = ""
+    if access_token is not None:
+        try:
+            request_id = _client().item_remove(access_token=access_token).get("request_id", "")
+        except PlaidError as err:
+            if err.error_code != "ITEM_NOT_FOUND":
+                raise
+        delete_access_token(sub, item_id)
+    delete_plaid_item(sub, item_id)
+    logger.info(json.dumps({
+        "route": "DELETE /plaid/items/{itemId}", "sub": sub, "itemId": item_id,
+        "hadToken": access_token is not None, "plaidRequestId": request_id,
+    }))
+    return _response(200, {"itemId": item_id, "disconnected": True})
 
 
 def _exchange(sub: str, body: dict) -> dict:
@@ -296,6 +371,13 @@ def _sandbox_action(event: dict) -> dict:
                 return {"ok": False, "error": "no stored access for that itemId"}
             refreshed = client.transactions_refresh(access_token=access_token)
             return {"ok": True, "plaidRequestId": refreshed.get("request_id", "")}
+        if action == "sandbox_reset_login":
+            item_id = str(event.get("itemId") or "")
+            access_token = get_access_token(sub, item_id)
+            if access_token is None:
+                return {"ok": False, "error": "no stored access for that itemId"}
+            reset = client.sandbox_item_reset_login(access_token=access_token)
+            return {"ok": True, "plaidRequestId": reset.get("request_id", "")}
     except PlaidError as err:
         return {"ok": False, "error": "plaid_error", **err.log_fields()}
     except SecretConfigError as err:
@@ -319,6 +401,12 @@ def _method(event: dict) -> str:
 
 def _path(event: dict) -> str:
     return event.get("requestContext", {}).get("http", {}).get("path") or event.get("rawPath", "")
+
+
+def _item_id_param(event: dict, path: str) -> str:
+    # API Gateway supplies the decoded path parameter; the raw path is the fallback.
+    param = (event.get("pathParameters") or {}).get("itemId")
+    return str(param if param is not None else path.removeprefix(_ITEM_PREFIX)).strip()
 
 
 def _parse_body(event: dict) -> dict:
