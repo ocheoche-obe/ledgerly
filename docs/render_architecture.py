@@ -33,9 +33,10 @@ from diagrams.aws.integration import SQS
 from diagrams.aws.management import Cloudwatch
 from diagrams.aws.ml import Bedrock
 from diagrams.aws.network import CloudFront, APIGateway
-from diagrams.aws.security import Cognito
+from diagrams.aws.security import Cognito, SecretsManager
 from diagrams.aws.storage import S3
 from diagrams.onprem.client import User
+from diagrams.onprem.network import Internet
 
 
 # === Global graph styling =====================================================
@@ -92,6 +93,8 @@ with Diagram(
     edge_attr=edge_attr,
 ):
     owner = User("Owner\n(browser)")
+    # The only non-AWS service Ledgerly calls (ADR-014). Outside the AWS boundary on purpose.
+    plaid = Internet("Plaid API\n(Sandbox)")
 
     with Cluster("AWS Cloud — us-east-1 (per stage: dev / prod)", graph_attr=AWS_CLOUD_ATTR):
 
@@ -111,9 +114,13 @@ with Diagram(
         with Cluster("Application Compute (Python 3.13)", graph_attr=LAYER_ATTR):
             api_l = Lambda("API Lambdas\nsettings · categories · budgets\ntransactions · dashboard · imports")
 
-        with Cluster("Ingest (pluggable source: CSV now, Plaid later)", graph_attr=LAYER_ATTR):
+        with Cluster("Ingest (pluggable source: CSV · Plaid Sandbox, dev only)", graph_attr=LAYER_ATTR):
             s3_up = S3("S3: CSV uploads\n(30-day expiry)")
             import_l = Lambda("import_handler\nparse · dedupe · summary")
+            # Slice 9 / ADR-014 — the second producer behind the same seam, plus the only
+            # runtime secrets in the system. Present in the dev stage only.
+            plaid_l = Lambda("api_plaid + plaid_sync\nlink · exchange · sync")
+            secrets = SecretsManager("Secrets Manager\nPlaid keys · access tokens")
 
         with Cluster("Async Categorization", graph_attr=LAYER_ATTR):
             queue = SQS("categorization\nqueue")
@@ -121,7 +128,7 @@ with Diagram(
             cat_l = Lambda("categorizer\nmerchant rules → LLM")
 
         with Cluster("AI", graph_attr=LAYER_ATTR):
-            bedrock = Bedrock("Amazon Bedrock\nClaude Opus 4.8\n(IAM auth — no API key)")
+            bedrock = Bedrock("Amazon Bedrock\nClaude Sonnet 4.6\n(IAM auth — no API key)")
 
         with Cluster("Data", graph_attr=LAYER_ATTR):
             ddb = Dynamodb("DynamoDB single table\n+ GSI1 (category) · GSI2 (review)\nPITR on")
@@ -146,6 +153,13 @@ with Diagram(
     queue >> Edge(style="dotted", **{"xlabel": "retry ×3"}) >> dlq
     cat_l >> bedrock
     cat_l >> ddb
+
+    # --- Plaid ingest (dev only): same downstream as CSV, plus the one non-AWS egress -----
+    apigw >> plaid_l
+    plaid_l >> ddb
+    plaid_l >> queue
+    plaid_l >> Edge(style="dotted", **{"xlabel": "read keys / tokens"}) >> secrets
+    plaid_l >> Edge(**{"xlabel": "HTTPS"}) >> plaid
 
     # --- Invisible layout hints ------------------------------------------------
     # Keep the interactive band above the ingest band, and pin ops to the right.

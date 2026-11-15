@@ -2,7 +2,8 @@
 
 Slice 1 (walking skeleton) wired five constructs: Data, Auth, Api, Web, Ops. Slice 4 added
 Ingest (CSV upload bucket + import Lambda). Slice 5 adds Categorization (SQS queue + DLQ +
-categorizer Lambda + Bedrock grant), the async AI backbone.
+categorizer Lambda + Bedrock grant), the async AI backbone. Slice 9 adds Plaid (Sandbox bank
+ingest + the first runtime secrets, ADR-014) — in the dev stage only.
 
 Construct order matters — it keeps CloudFormation dependencies acyclic:
   Data → Categorization(needs table; owns the queue) → Web(bucket+CDN) → Auth(callback URLs
@@ -20,6 +21,7 @@ from ledgerly.constructs.categorization import CategorizationConstruct
 from ledgerly.constructs.data import DataConstruct
 from ledgerly.constructs.ingest import IngestConstruct
 from ledgerly.constructs.ops import OpsConstruct
+from ledgerly.constructs.plaid import PlaidConstruct
 from ledgerly.constructs.web import WebConstruct
 
 
@@ -53,6 +55,17 @@ class LedgerlyStack(Stack):
             categorize_queue=categorization.queue,
             allowed_origins=allowed_origins,
         )
+        # Plaid ingest (ADR-014) exists only where a Plaid environment is configured — dev.
+        # prod gets no Plaid Lambdas, routes, secrets or IAM at all.
+        plaid = None
+        if stage.plaid_env is not None:
+            plaid = PlaidConstruct(
+                self,
+                "Plaid",
+                stage=stage,
+                table=data.table,
+                categorize_queue=categorization.queue,
+            )
         api = ApiConstruct(
             self,
             "Api",
@@ -60,6 +73,7 @@ class LedgerlyStack(Stack):
             table=data.table,
             upload_bucket=ingest.bucket,
             categorize_queue=categorization.queue,
+            plaid_fn=plaid.api_fn if plaid else None,
             user_pool=auth.user_pool,
             user_pool_client=auth.user_pool_client,
             allowed_origins=allowed_origins,

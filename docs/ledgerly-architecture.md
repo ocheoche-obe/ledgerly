@@ -1,6 +1,6 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
 **Last updated:** 2026-08-07
 
@@ -28,8 +28,9 @@ key-range query, not a scan or a join.
 
 Major moving parts: a React SPA (S3 + CloudFront) → Cognito (auth) → API Gateway HTTP API
 (JWT authorizer) → Python Lambdas → DynamoDB single table, plus the S3-triggered import
-Lambda, the SQS-fed categorizer Lambda, and Bedrock. There are **no runtime secrets
-anywhere**: Bedrock, DynamoDB, S3, and SQS are all reached with IAM roles.
+Lambda, the SQS-fed categorizer Lambda, and Bedrock. Bedrock, DynamoDB, S3, and SQS are all
+reached with IAM roles. The **only runtime secrets** are Plaid's (ADR-014, `dev` stage only):
+API keys and per-connection access tokens, both in Secrets Manager.
 
 ### 0.1 Deployment target & environment — the WHERE
 
@@ -478,8 +479,16 @@ Browser → Cognito Hosted UI (Authorization Code + PKCE) → redirect with code
 
 ### 4.3 Secrets & configuration
 
-- **There are no runtime secrets.** Bedrock/DynamoDB/S3/SQS all use IAM roles (ADR-008);
+- **AWS services use no secrets.** Bedrock/DynamoDB/S3/SQS all use IAM roles (ADR-008);
   Cognito client ID and API URL are public-by-design SPA config.
+- **Plaid is the one exception (ADR-014, `dev` only), and it follows the standing rule below.**
+  Two Secrets Manager secrets: `ledgerly/<stage>/plaid/api-keys` (`{"client_id", "secret"}`) is
+  created and filled in **by the owner by hand** — the stack only references it by name, so the
+  value never passes through CDK, CloudFormation, the repo or CI; and
+  `ledgerly/<stage>/plaid/access-tokens` (`{"items": {<itemId>: {sub, accessToken}}}`) is
+  created empty by the stack and written only by the `api_plaid` Lambda. Lambdas get secret
+  *names* in their environment, never values. The sync worker can read both and write
+  neither. No value is logged, returned to the browser, or stored in DynamoDB.
 - Configuration (table name, queue URL, model ID, confidence threshold) flows as Lambda
   environment variables set by CDK. If a secret ever appears (e.g. Plaid tokens later), it
   goes in Secrets Manager per NFR-4.3/4.5 — recorded here as the standing rule.
@@ -599,3 +608,4 @@ resolves it.)*
 | 1.4 | 2026-07-19 | Slice-4 data-model refinement from real Chase exports: §2.4 transaction natural key now includes `balanceCents` (ADR-012) so legitimate same-day/-amount/-merchant charges aren't silently deduped; `IMPORT#` carries an owner-confirmed `accountLabel` (ADR-013). No change to the dedupe *mechanism* (content-hash key-equality + `FILEHASH#`). |
 | 1.5 | 2026-07-21 | Slice-5 categorization pipeline **implemented** as designed (§3.2, §4.5) — no design change to the async shape (SQS→categorizer→Bedrock + DLQ; the §1 diagram already depicted it). Impl details recorded under ADR-008: Bedrock is called via **boto3 `invoke_model`** (not the `anthropic` SDK — zero-runtime-deps) with a forced-tool structured output, and Opus 4.8 is **INFERENCE_PROFILE-only**, so the runtime model id is `us.anthropic.claude-opus-4-8` and the categorizer's IAM grant covers the inference-profile ARN + the underlying foundation-model ARN. `TXN#` items gain `confidence`/`needsReview` + GSI1 (category) / GSI2 (sparse review) keys on categorization, exactly as §2.6 sketched. |
 | 1.6 | 2026-08-07 | Slice-6 budgets & dashboard **implemented** as designed (§2.2 AP 4/5/15, §3.3) — no change to the data model: budgets still key `BUDGET#<cycleId>#<categoryId>`, cycle-major. Two §2.5 route-shape notes: (1) the API addresses a cycle by `current` or an **ISO date inside it** (`{cycleRef}`), never the raw cycle ID, because the ID's `#` would have to survive URL encoding and a mis-encoded ID would silently address a nonexistent cycle — the server derives the canonical ID from the cadence history; (2) new `POST /transactions/recategorize` re-drives categorization over a window ([B-7]), the path that never existed because the importer only enqueues newly-added rows. §3.3 gains the aggregation semantics (spend = negated net so refunds net down; a synthetic Uncategorized row so unfiled money can't vanish; `remaining` counts only budgeted categories; `truncated` when the single-page read hits its cap). AP 15 corrected: the picker needs one `Limit=1` Query for the earliest transaction, not settings alone. |
+| 1.7 | 2026-11-15 | Slice-9 Plaid Sandbox ingest **backend implemented** per ADR-014 (`dev` only; `prod` synthesizes with no Plaid resources). §0/§4.3: "no runtime secrets" replaced — two Secrets Manager secrets for Plaid (owner-created API keys, stack-created access tokens). New `PlaidConstruct` (`api_plaid` + async `plaid_sync` worker), routes `POST /plaid/link-token` / `/plaid/exchange` / `/plaid/sync`, items `PLAIDITEM#<itemId>` and pointer `PLAIDTXN#<transaction_id>`; Plaid rows are ordinary `TXN#` items (`txnId` = Plaid's `transaction_id`, `pending` flag, no `balanceCents`). Diagram re-rendered (Plaid + Secrets Manager; Bedrock label corrected to Sonnet 4.6). §1.2/§1.3/§2.4/§2.5 prose still to be brought current at slice wrap. |

@@ -54,6 +54,10 @@ class StageConfig:
     log_retention_days: int
     # CloudFormation stack termination protection.
     termination_protection: bool
+    # Plaid environment this stage talks to, or None for no Plaid at all (ADR-014). None means
+    # the stage synthesizes with no Plaid routes, Lambdas, secrets or IAM. "sandbox" is the
+    # only value the backend accepts; Plaid Production needs its own ADR first.
+    plaid_env: str | None = None
 
 
 STAGES: dict[str, StageConfig] = {
@@ -64,6 +68,7 @@ STAGES: dict[str, StageConfig] = {
         retain_data=False,          # dev is disposable; recreate freely
         log_retention_days=30,
         termination_protection=False,
+        plaid_env="sandbox",        # Slice 9: Plaid Sandbox ingest, dev only (ADR-014)
     ),
     "prod": StageConfig(
         name="prod",

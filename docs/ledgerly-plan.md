@@ -82,7 +82,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | 🔨 started 2026-08-07 — **includes [B-7]** (recategorize endpoint) as its first task, owner-approved 2026-08-03 | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
-| 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | 🔨 started 2026-11-15 — ADR-014 Accepted | — |
+| 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | 🔨 started 2026-11-15 — ADR-014 Accepted; backend built, not yet deployed or run against Sandbox | — |
 
 > Slicing rationale: Slice 1 is the **thinnest end-to-end proof** that the whole stack
 > works deployed (the kit's rule) — thinner than the interview candidate ("CSV upload →

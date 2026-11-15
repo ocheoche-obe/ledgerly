@@ -37,7 +37,7 @@ slice.
 
 | Task | Why it matters | Where | State |
 |------|----------------|-------|-------|
-| Put the Sandbox `client_id` + Sandbox secret into the AWS secret the stack creates (owner does this; never pasted into chat, a file in the repo, or CDK) | Without it every Plaid call fails with invalid keys (GUIDE-001/021) | Keys: https://dashboard.plaid.com/developers/keys → AWS Secrets Manager, `ledgerly-dev` profile | needs_human (after the stack deploys) |
+| Create the AWS secret `ledgerly/dev/plaid/api-keys` (us-east-1, account 816020558700) with value `{"client_id": "...", "secret": "<Sandbox secret>"}` (owner does this; never pasted into chat, a file in the repo, or CDK) | Without it every Plaid call fails with invalid keys (GUIDE-001/021) | Keys: https://dashboard.plaid.com/developers/keys → AWS Secrets Manager, `ledgerly-dev` profile | needs_human (can be done before or after the stack deploys) |
 | Sandbox access to `transactions` | Required product | Dashboard → Products | verified (2026-11-14) |
 | Webhook receiver | Item/transaction webhooks are set per Item in code, not here; webhooks are out of scope this slice (TASK-003) | — | not_applicable |
 | Register an OAuth redirect URI | Chase connects by OAuth; without it Chase is silently absent or breaks mid-flow (OAUTH-001). Not needed for non-OAuth Sandbox banks | https://dashboard.plaid.com/developers/api | needs_human — before Production, not this slice (list is empty today) |
@@ -46,15 +46,25 @@ slice.
 
 ## Implementation checklist
 
-ADR-014 accepted 2026-11-15; backend build in progress.
+ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run against Sandbox.
 
-- [ ] `adapters/plaid.py` — `/link/token/create`, `/item/public_token/exchange`,
-      `/transactions/sync`, `/accounts/get`, `/item/remove`
-- [ ] `core/plaid_normalize.py` + tests (sign flip TXN-005, null merchant TXN-013, pending flag)
-- [ ] `api_plaid` Lambda + `plaid_sync` worker (full-loop sync, cursor saved last: TXN-002,
-      TXN-007, TXN-011, DATA-007)
-- [ ] `added` / `modified` / `removed` (TXN-004)
-- [ ] Secrets Manager secrets + per-Lambda IAM; `dev` stage only
+- [x] `adapters/plaid.py` — `/link/token/create`, `/item/public_token/exchange`,
+      `/transactions/sync`, `/accounts/get` (keys in headers GUIDE-001; errors carry code/type/
+      request_id only GUIDE-006, ITEM-002; backoff + jitter ITEM-004/013; Sandbox host only)
+- [ ] `/item/remove` (disconnect, ITEM-005) — not built yet; goes with the SPA panel
+- [x] `core/plaid_normalize.py` + tests (sign flip TXN-005, null merchant TXN-013, pending flag)
+- [x] `core/plaid_sync.py` + `plaid_sync` worker (buffer all pages, restart from the starting
+      cursor on mutation, count 500, cursor saved last: TXN-002, TXN-007, TXN-011, DATA-007 —
+      DATA-007's "one transaction" is met by idempotent writes + cursor-last, since a first sync
+      exceeds DynamoDB's transaction size)
+- [x] `added` / `modified` / `removed`, pending merged into posted via
+      `pending_transaction_id` with the category carried over (TXN-004)
+- [x] `api_plaid` Lambda: link token (CONV-001/002), exchange (GUIDE-015, duplicate-institution
+      guard ITEM-011), sync start
+- [x] Secrets Manager + per-Lambda IAM; `dev` stage only (`prod` synth has no Plaid resources)
+- [x] Sandbox test actions (direct Lambda invoke only, refused outside Sandbox):
+      `sandbox_link` (SANDBOX-003) and `sandbox_refresh` (TXN-014). `/transactions/refresh` is a
+      billed add-on in Production (GUIDE-016) and is reachable only through that test action.
 - [ ] SPA "Bank connection" panel (WEB-001/002/003, WEB-020/021)
 
 ## Acceptance
