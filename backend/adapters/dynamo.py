@@ -36,7 +36,7 @@ from core.imports import (
 )
 from core.merchant_rules import rule_sk
 from core.plaid_items import plaid_item_sk, plaid_txn_pointer_sk
-from core.plaid_normalize import SOURCE_FIELDS
+from core.plaid_normalize import SOURCE_FIELDS, STICKY_SOURCE_FIELDS
 from core.settings import default_profile, settings_view
 from core.transactions import (
     OWNER_SET_STATUSES,
@@ -624,7 +624,12 @@ def save_plaid_sync_state(
     try:
         _table.update_item(
             Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
-            UpdateExpression="SET #c = :cursor, accounts = :accounts, lastSyncedAt = :at",
+            # A sync that got this far reached Plaid with a working login, so any error
+            # recorded by an earlier failed sync (e.g. ITEM_LOGIN_REQUIRED) no longer holds.
+            # Cleared only when this sync wins the cursor race; if a concurrent sync wins
+            # instead, a stale error can linger until the next sync - self-healing, accepted.
+            UpdateExpression="SET #c = :cursor, accounts = :accounts, lastSyncedAt = :at "
+                             "REMOVE errorCode, errorAt",
             ConditionExpression="#c = :previous",
             ExpressionAttributeNames={"#c": "cursor"},
             ExpressionAttributeValues={
@@ -639,6 +644,33 @@ def save_plaid_sync_state(
         if err.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return False
         raise
+
+
+def set_plaid_item_error(sub: str, item_id: str, *, error_code: str, at: str) -> None:
+    """Record the Plaid error that stopped a sync, so the connections panel can say what is
+    wrong (and offer a reconnect when that is the fix). Cleared by the next successful sync.
+    A no-op if the Item was disconnected in the meantime."""
+    try:
+        _table.update_item(
+            Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
+            UpdateExpression="SET errorCode = :code, errorAt = :at",
+            ConditionExpression="attribute_exists(sk)",
+            ExpressionAttributeValues={":code": error_code, ":at": at},
+        )
+    except ClientError as err:
+        if err.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+
+def delete_plaid_item(sub: str, item_id: str) -> bool:
+    """Delete a disconnected Item's record. Its transactions are deliberately left alone —
+    they are spending history, and removing them is a separate, owner-approved purge
+    (ADR-014: every Plaid row is tagged with its source and Item for exactly that)."""
+    response = _table.delete_item(
+        Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
+        ReturnValues="ALL_OLD",
+    )
+    return "Attributes" in response
 
 
 def get_plaid_txn_date(sub: str, transaction_id: str) -> str | None:
@@ -776,7 +808,11 @@ def update_plaid_transaction(
 
     changed = {f: item_body[f] for f in SOURCE_FIELDS
                if f in item_body and stored.get(f) != item_body[f]}
-    dropped = [f for f in SOURCE_FIELDS if f not in item_body and f in stored]
+    # accountType is sticky: once a row is known to be a loan row it stays one, even after
+    # the account drops out of /accounts/get (a closed loan) and the stored account list
+    # forgets it — otherwise its payment would start counting as income again.
+    dropped = [f for f in SOURCE_FIELDS
+               if f not in item_body and f in stored and f not in STICKY_SOURCE_FIELDS]
     if not changed and not dropped:
         return "unchanged", status
 

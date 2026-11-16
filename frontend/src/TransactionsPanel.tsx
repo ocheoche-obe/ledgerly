@@ -108,7 +108,17 @@ export function TransactionsPanel({
               {transactions.map((t) => (
                 <tr key={t.txnId}>
                   <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{t.date}</td>
-                  <td style={styles.td}>{t.descriptionRaw}</td>
+                  <td style={styles.td}>
+                    {t.descriptionRaw}
+                    {t.pending && (
+                      <span
+                        style={{ ...styles.badge, marginLeft: 6 }}
+                        title="Not yet posted by the bank"
+                      >
+                        pending
+                      </span>
+                    )}
+                  </td>
                   <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{t.accountId}</td>
                   <td style={styles.td}>
                     {t.categoryId ? (

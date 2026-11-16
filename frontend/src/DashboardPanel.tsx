@@ -150,6 +150,8 @@ export function DashboardPanel({
                   : `${formatCents(totals.netCents)} left over`
               }
             />
+            {/* Pending charges already count in every figure here (owner decision, ADR-014);
+                this says how much of it can still change when the bank posts it. */}
             <Tile label="Budgeted" value={formatCents(totals.budgetedCents)} />
             <Tile
               label="Remaining"
@@ -162,6 +164,24 @@ export function DashboardPanel({
               }
             />
           </div>
+
+          {(totals.pendingCount ?? 0) > 0 && (
+            <p className="ldg-note ldg-note-pending">
+              Includes <strong>{formatCents(totals.pendingSpentCents ?? 0)}</strong> in{" "}
+              {totals.pendingCount} pending transaction{totals.pendingCount === 1 ? "" : "s"} — the
+              bank hasn't posted {totals.pendingCount === 1 ? "it" : "them"} yet, so the amount
+              can still change or drop off.
+            </p>
+          )}
+
+          {(totals.excludedCount ?? 0) > 0 && (
+            <p className="ldg-note">
+              {totals.excludedCount} loan-account transaction
+              {totals.excludedCount === 1 ? " isn't" : "s aren't"} counted here. A loan payment is
+              money moving between your own accounts, not spending; loan balances are under{" "}
+              <strong>Bank connections</strong>.
+            </p>
+          )}
 
           {totals.uncategorizedCount > 0 && (
             <p className="ldg-note">
@@ -216,6 +236,13 @@ export function DashboardPanel({
                     }`}
                   >
                     {isIncome ? formatCents(-row.spentCents) : formatCents(row.spentCents)}
+                    {(row.pendingSpentCents ?? 0) !== 0 && (
+                      <span className="ldg-pending" title="Not yet posted by the bank">
+                        {/* Same sign convention as the figure beside it, so a pending
+                            refund in a spending row reads as negative, not as more spend. */}
+                        {formatCents(isIncome ? -(row.pendingSpentCents ?? 0) : (row.pendingSpentCents ?? 0))} pending
+                      </span>
+                    )}
                   </span>
 
                   <span className="ldg-budget">

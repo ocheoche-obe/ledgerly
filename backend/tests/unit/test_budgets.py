@@ -191,6 +191,39 @@ def test_empty_cycle_produces_zero_totals_not_an_error():
         "moneyInCents": 0, "moneyOutCents": 0, "netCents": 0, "budgetedCents": 0,
         "spentAgainstBudgetCents": 0, "remainingCents": 0,
         "transactionCount": 0, "uncategorizedCount": 0,
-        "pendingSpentCents": 0, "pendingCount": 0,
+        "pendingSpentCents": 0, "pendingCount": 0, "excludedCount": 0,
     }
     assert result["cycle"] == CYCLE
+
+
+# --- loan accounts stay out of the figures (owner decision 2026-11-15) -------------------
+
+def test_loan_account_rows_count_toward_nothing():
+    loan_payment = {**_txn(51400, INCOME), "accountType": "loan"}
+    loan_interest = {**_txn(-3100, None), "accountType": "loan"}
+    groceries = {**_txn(-2500, GROC), "accountType": "depository"}
+
+    result = summarize(
+        cycle=CYCLE, categories=CATEGORIES, budgets=[],
+        transactions=[loan_payment, loan_interest, groceries],
+    )
+
+    rows = _rows(result)
+    assert rows[INCOME]["spentCents"] == 0  # the payment no longer reads as income
+    assert UNCATEGORIZED_ROW_ID not in rows  # nor does the interest row surface there
+    assert rows[GROC]["spentCents"] == 2500
+    totals = result["totals"]
+    assert (totals["moneyInCents"], totals["moneyOutCents"]) == (0, 2500)
+    assert totals["transactionCount"] == 1
+    assert totals["excludedCount"] == 2
+
+
+def test_exclusion_follows_the_account_type_not_the_label():
+    # A CSV account the owner happened to label like a Plaid loan account still counts.
+    result = summarize(
+        cycle=CYCLE, categories=CATEGORIES, budgets=[],
+        transactions=[{**_txn(-2500, GROC), "accountId": "auto-loan-5000"},
+                      {**_txn(-1000, GROC), "accountType": "credit"}],  # card purchases count
+    )
+    assert result["totals"]["transactionCount"] == 2
+    assert result["totals"]["excludedCount"] == 0

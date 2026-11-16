@@ -1,7 +1,7 @@
 # Ledgerly — Architectural Decisions Log (ADL)
 
 **Status:** Living document — updated as decisions are made
-**Last updated:** 2026-08-03
+**Last updated:** 2026-11-16
 
 ---
 
@@ -58,6 +58,8 @@ Superseded.
 | ADR-011 | CI/CD deploy federation: GitHub OIDC assuming CDK bootstrap roles | Accepted |
 | ADR-012 | Transaction natural key includes the running balance | Accepted |
 | ADR-013 | Per-file account identity supplied (and confirmed) at upload time | Accepted |
+| ADR-014 | Plaid becomes the primary ingest source (Sandbox only for now) | Accepted |
+| ADR-015 | Loan accounts stay out of spend; Plaid Sandbox data lives under its own user | Accepted |
 
 ---
 
@@ -872,6 +874,60 @@ Plaid pricing against the ceiling** (NFR-1.1's own rule).
   allow `cdn.plaid.com`.
 - Sandbox Items expire into a re-login state after about 30 days by design, so the reconnect
   ("update mode") path is unbuilt but will be needed for Production.
+
+---
+
+## ADR-015: Loan accounts stay out of spend; Plaid Sandbox data lives under its own user
+
+**Status:** Accepted (2026-11-15, Slice 9 — owner decisions; recorded at slice wrap)
+
+### Context
+
+The first live Plaid Sandbox sync surfaced two problems ADR-014 had not decided.
+
+1. **Loan payments read as income.** A loan account reports each payment as a *credit* (the
+   balance owed went down). Counted like any other row, 46 Sandbox loan payments were filed as
+   Income and netted spend down. The same payment also leaves checking, so once both sides are
+   synced it would be counted twice. A credit-card payment from checking has the same shape.
+2. **Sandbox rows were mixing with the owner's real rows.** ADR-014 accepted Sandbox data in the
+   `dev` table next to the 153 real Chase rows, tagged for a later purge. In practice it put fake
+   money into the owner's real cycle totals during the very slice meant to evaluate them.
+
+### Decision
+
+1. **Rows from accounts of Plaid type `loan` are left out of every dashboard figure.** The
+   account type is stamped on each Plaid row at sync time (`accountType`) and is never removed by a
+   later update, so the rule survives a disconnect and a closed account. The dashboard says how
+   many rows it left out; loan balances stay visible on the Bank connections panel. Debt spending
+   is counted once, where the cash leaves.
+2. **A "Transfer" category (card payments, savings/CD moves) is deferred to Slice 7.**
+3. **Plaid Sandbox data lives under a separate, dev-only Cognito user** (`PlaidSandboxUser`, a
+   plus-address of the owner's email), isolated by the `USER#<sub>` partition (ADR-006). The
+   Sandbox rows already in the owner's partition were deleted with an owner-approved, owner-run
+   script (`backend/ops/purge_plaid_sandbox.py`: dry run by default, execution bound to a
+   fingerprint of the exact keys the dry run listed, refused while a connection is linked).
+
+### Alternatives considered
+
+- **Count loan payments as debt spend.** Rejected: double-counts as soon as the checking side
+  is synced.
+- **Leave loan rows as they are.** Rejected: the dashboard's main figures are wrong.
+- **A "hide Sandbox" filter on every read path.** Rejected: complexity spread across every
+  query, for test data. **A separate `dev` stage or table** — rejected as heavier than a user.
+
+### Consequences
+
+- Dashboard totals no longer reconcile one-to-one with the transaction list; `excludedCount`
+  and the dashboard note make the gap visible instead of silent.
+- Rows written before `accountType` existed are not backfilled. The only such rows were the
+  Sandbox rows this ADR deletes, so nothing needed a backfill.
+- Transfers between the owner's own non-loan accounts still count as spend until Slice 7 (the
+  `user_good` Sandbox persona shows card payments and CD deposits as its largest "spend").
+  Plaid's `personal_finance_category` (which labels transfers and loan payments) is the natural
+  input for that work.
+- Nothing yet *stops* the owner linking a Sandbox bank while signed in as themselves; the
+  separation is a convention backed by the purge tooling, not an enforced rule (backlog [B-11]).
+- Production remains governed by ADR-014: a real bank would sync into the owner's own partition.
 
 ---
 

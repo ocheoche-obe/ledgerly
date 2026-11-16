@@ -19,6 +19,10 @@ BUDGET_FORECAST_USD = 8
 
 # Owner contact for budget alerts. Sourced from the session context; change here if it moves.
 OWNER_EMAIL = "oche.ocheobe@gmail.com"
+# Plaid Sandbox test user (owner decision 2026-11-15): Sandbox data lives under its own Cognito
+# sub, so the USER#<sub> partition (ADR-006) keeps it away from the owner's real rows. A
+# plus-address of the owner's mailbox, so Cognito's temporary password lands in the same inbox.
+SANDBOX_TEST_EMAIL = OWNER_EMAIL.replace("@", "+sandbox@", 1)
 
 # AI categorization (Slice 5, ADR-008 as amended 2026-08-03). Config flows to the categorizer
 # Lambda as env vars, and the model ids also scope the Bedrock IAM grant — kept here so runtime

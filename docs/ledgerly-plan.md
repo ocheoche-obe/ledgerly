@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 1.3
+**Version:** 1.4
 **Created:** 2026-07-12
 
 ---
@@ -82,7 +82,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 6 | Budgets & at-a-glance dashboard | FR-4.3/4.5, FR-5.1–5.4 | 🔨 started 2026-08-07 — **includes [B-7]** (recategorize endpoint) as its first task, owner-approved 2026-08-03 | — |
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
-| 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | 🔨 started 2026-11-15 — ADR-014 Accepted; backend built, not yet deployed or run against Sandbox | — |
+| 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | ✅ complete (2026-11-16) — verified live on dev through the real UI; Plaid acceptance PASS; ADR-014 + ADR-015 | [#61](https://github.com/ocheoche-obe/ledgerly/pull/61), [#62](https://github.com/ocheoche-obe/ledgerly/pull/62) |
 
 > Slicing rationale: Slice 1 is the **thinnest end-to-end proof** that the whole stack
 > works deployed (the kit's rule) — thinner than the interview candidate ("CSV upload →
@@ -649,7 +649,7 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
   flipped to "v1 in real use — evaluation running".
 - **Completion notes:** _—_
 
-### Slice 9 — Plaid Sandbox ingest 🔨 (proposed 2026-11-14, started 2026-11-15; runs before Slice 7)
+### Slice 9 — Plaid Sandbox ingest ✅ (proposed 2026-11-14, started 2026-11-15, complete 2026-11-16)
 
 - **Goal:** link a Plaid Sandbox bank from the SPA, sync its transactions into the existing
   pipeline, and see them categorized on the dashboard — with nothing downstream of ingest changed.
@@ -668,14 +668,36 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
 - **Decisions (owner, 2026-11-15):** ADR-014 accepted as written — Secrets Manager · dedupe/
   mutation rules · "Sync now" trigger · CSV stays · pending transactions count toward "spent" ·
   Sandbox rows share the `dev` table, tagged for purge.
-- **Exit criteria (all against the deployed `dev` stack):** ☐ link First Platypus Bank with
-  Plaid's test login from the SPA ☐ first sync lands transactions, they categorize, and they show
-  on the dashboard ☐ a second sync adds 0 ☐ added, modified and removed each exercised with
-  Plaid's dynamic-transactions test user, with a category correction surviving a `modified`
-  ☐ access token and API keys appear in no log line, no API response and no table item ☐ `prod`
-  synth contains no Plaid resources ☐ month-to-date bill checked ☐ docs current (architecture
-  §1.2/§1.3/§2.4/§2.5/§4.3, diagram re-rendered, ADR-014 → Accepted).
-- **Completion notes:** _—_
+- **Exit criteria (all against the deployed `dev` stack):** ☑ link First Platypus Bank with
+  Plaid's test login from the SPA ☑ first sync lands transactions, they categorize, and they show
+  on the dashboard ☑ a second sync adds 0 ☑ added, modified and
+  removed exercised live with `user_transactions_dynamic` (Tartan Bank, driven by direct API-event
+  invokes as the Sandbox user): a sync applied 294 Plaid `modified` + 37 added; after
+  `/transactions/refresh`, 18 added and 14 pending→posted merges (Plaid `removed` + posted
+  `added`, folded into one row). ◐ "a category correction survives a `modified`" is unit-tested
+  only — there is no correction UI until Slice 7 ☑ access token and API keys appear in no log line, no API response and
+  no table item ☑ `prod` synth contains no Plaid resources ☑ month-to-date bill checked ($0.0003,
+  2026-11-16) ☑ docs current (architecture v1.8 §1.2/§1.3/§2.4/§2.5/§4.3; diagram already shows
+  Plaid from #61 and this PR changed no system shape; ADR-014 Accepted, ADR-015 added).
+- **Completion notes (2026-11-16):**
+  - **Shipped in two PRs.** #61: backend (link token, exchange, buffered sync worker, Secrets
+    Manager, `PlaidConstruct`). #62: the Bank connections panel (pre-initialized Link, Connect,
+    Sync now, Reconnect in update mode, Disconnect via `/item/remove`), `GET /plaid/items`,
+    `DELETE /plaid/items/{itemId}` and update-mode link tokens (paths owner-confirmed), pending
+    shown on the dashboard, the `/review-pr` blind-review harness, and a Cognito logout fix.
+  - **Two owner decisions → ADR-015:** loan-account rows are left out of the dashboard figures
+    (stamped `accountType`, sticky); Sandbox data lives under a dev-only Cognito Sandbox user.
+    The 701 Sandbox items already in the owner's partition were deleted with an owner-approved,
+    fingerprint-bound script (`backend/ops/purge_plaid_sandbox.py`); 184 real items remain.
+  - **Verified live** through the real UI (Playwright) as the Sandbox user; Plaid build-kit
+    acceptance round 1 PASS (`PLAID_PLAN.md`). Persona 2 (`user_good`) shows the next gap:
+    transfers between own accounts count as spend → Slice 7's Transfer category.
+  - **Gotchas:** the agent cannot `cdk deploy` without an exact-match allow rule ([B-10]); a
+    `!` command from another device is chat text; `react-plaid-link` 5 keeps the old handler
+    `ready` while a new token loads (one keyed hook per token); Cognito `/logout` needs
+    `client_id` + `logout_uri`, not OIDC's parameters.
+  - **Deferred, routed:** review findings → [B-11]; webhooks (replacing Sync now), Production,
+    OAuth → a future Plaid slice.
 
 ---
 
@@ -721,3 +743,4 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
 | 1.3 | 2026-08-07 | Slice 6 🔨 code-complete: [B-7] `POST /transactions/recategorize` (uncategorized-only by default, `includeCategorized` → a `force` flag the *categorizer* honours, since its own replay-skip would otherwise ignore re-runs); budgets per category per cycle (AP 4/5) + `GET /cycles/{cycleRef}/summary` (AP 4+6) + `GET /cycles` picker (AP 15); dashboard with a real design pass, browser-verified at 1440×900 (fits, NFR-7.1) and 390×844 (FR-5.4). Cycles are addressed by `current`-or-ISO-date, not raw cycle IDs (architecture §2.5 note; no ADR). [B-6] closed — infra pinned to compatible-minor, and the drift it predicted was real (local venv 2.261.0 vs the file's own 2.262.2 floor); no template drift after upgrading. Architecture → v1.6. 216 backend + 19 frontend tests. Live exit criteria open until the pipeline deploys on merge |
 | 1.2 | 2026-08-07 | Slice 6 🔨 started. Dev-data survey at slice start found all real data sits in *past* cycles (59 June + 94 July, uncategorized) and dev's cadence is a stray biweekly from a Slice-3 smoke test → the current cycle is empty, making the FR-5.3 cycle picker load-bearing for verification. Four ⚠ decisions resolved with the owner: [B-7] recategorize = uncategorized-only with an `includeCategorized` opt-in; dev cadence reverted to monthly; a real design pass for the dashboard only ([B-3] still deferred); no ADR for the new route (architecture §2.5 route table updated instead). [B-6] (pin `infra/requirements.txt`) folded in — this is the next infra-touching slice. Exit criteria extended to cover budget editing, NFR-2.1 and NFR-7.1 |
 | 1.1 | 2026-07-21 | Slice 5 🔨 code-complete: async AI categorization (SQS+DLQ → categorizer → Bedrock Claude Opus 4.8) + eval harness, FR-3.1–3.3/3.5. `core/categorize/` decision matrix + `merchant_rules` + `bedrock`/`sqs` adapters + `CategorizationConstruct`; 164 backend/13 frontend tests. Threshold 0.8 (owner-approved); harness A/Bs Opus 4.8 vs Sonnet 5 (owner-agreed, 2026-07-21). ADR-008 impl notes added (boto3 not `anthropic` SDK; Opus 4.8 is INFERENCE_PROFILE-only → `us.anthropic.…` id + profile/FM IAM grant). Deploy + live smoke + eval baseline via pipeline on merge (Option A) — those exit criteria stay open until then; owner's labeled sample still needed for the baseline number |
+| 1.4 | 2026-11-16 | Slice 9 ✅ complete (#61 backend, #62 bank connections UI). Verified live on dev through the real UI as a dev-only Sandbox user; Plaid acceptance PASS. ADR-015 (loan accounts out of spend; Sandbox data under its own user); 701 Sandbox items purged from the owner's partition with the owner's approval. Merge cadence changed by the owner: a clean blind `/review-pr` + green CI merges without waiting (CLAUDE.md "Who merges"). Backlog [B-10] (dispatchable dev deploy), [B-11] (deferred review findings) |

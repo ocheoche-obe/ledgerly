@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { User, UserManager } from "oidc-client-ts";
 import { loadConfig, type AppConfig } from "./config";
-import { makeUserManager } from "./auth";
+import { cognitoLogoutUrl, makeUserManager } from "./auth";
 import {
   makeApi,
   type Api,
@@ -10,6 +10,7 @@ import {
   type Transaction,
 } from "./api";
 import { DashboardPanel } from "./DashboardPanel";
+import { BankConnectionsPanel } from "./BankConnectionsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { CategoriesPanel } from "./CategoriesPanel";
 import { ImportPanel } from "./ImportPanel";
@@ -95,18 +96,20 @@ export default function App() {
   };
 
   const login = () => mgr?.signinRedirect();
-  const logout = () => {
+  const logout = async () => {
     setSettings(null);
     setCategories(null);
     setTxns(null);
     setApi(null);
-    mgr?.signoutRedirect();
+    // Drop the local tokens, then end the Cognito session too (see cognitoLogoutUrl).
+    await mgr?.removeUser();
+    if (cfg) window.location.assign(cognitoLogoutUrl(cfg));
   };
 
   return (
     <main style={styles.main}>
       <h1 style={styles.h1}>Ledgerly</h1>
-      <p style={styles.tagline}>Budgets &amp; dashboard — Slice 6</p>
+      <p style={styles.tagline}>Budgets &amp; bank connections — Slice 9</p>
 
       {error && <pre style={styles.error}>{error}</pre>}
 
@@ -128,6 +131,10 @@ export default function App() {
           {/* The dashboard leads: it is the product's reason to exist (FR-5.1), and the
               question the owner opens the app to answer. */}
           {api && <DashboardPanel api={api} onError={setError} reloadKey={dataVersion} />}
+
+          {/* Where the dashboard's numbers come from (Plaid Sandbox, dev only — the panel hides
+              itself where the Plaid routes don't exist). A sync refreshes the dashboard. */}
+          {api && <BankConnectionsPanel api={api} onChanged={refreshTxns} onError={setError} />}
 
           {api && settings ? (
             <SettingsPanel api={api} settings={settings} onChange={setSettings} onError={setError} />

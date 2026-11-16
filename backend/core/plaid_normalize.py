@@ -62,11 +62,15 @@ def normalize(
     account_labels: dict[str, str],
     item_id: str,
     plaid_env: str,
+    account_types: dict[str, str] | None = None,
 ) -> dict:
     """One Plaid transaction → a normalized transaction dict (no DynamoDB key attributes).
 
     ``account_labels`` maps Plaid ``account_id`` → Ledgerly's readable ``accountId``; an
-    account the map doesn't know falls back to the Plaid ID. Raises ValueError when the object
+    account the map doesn't know falls back to the Plaid ID. ``account_types`` maps the same
+    IDs to Plaid's account ``type`` (``depository``, ``credit``, ``loan``, ...), stamped on the
+    row as ``accountType`` so the dashboard can leave loan rows out even after the connection
+    is gone. Raises ValueError when the object
     is unusable (no ID, no date, no amount) so the sync can count it rather than crash.
     """
     txn_id = txn.get("transaction_id")
@@ -104,6 +108,9 @@ def normalize(
     # Optional attributes are omitted rather than stored as null.
     if txn.get("pending_transaction_id"):
         normalized["pendingTransactionId"] = txn["pending_transaction_id"]
+    account_type = (account_types or {}).get(plaid_account_id)
+    if account_type:
+        normalized["accountType"] = account_type
     if txn.get("authorized_date"):
         normalized["authorizedDate"] = txn["authorized_date"]
     currency = txn.get("iso_currency_code") or txn.get("unofficial_currency_code")
@@ -124,8 +131,14 @@ SOURCE_FIELDS = (
     "sourceType",
     "pending",
     "plaidAccountId",
+    "accountType",
     "raw",
     "pendingTransactionId",
     "authorizedDate",
     "currency",
 )
+
+# Source fields an update may change but never remove. `accountType` keeps loan rows out of
+# the dashboard; losing it because an account vanished from /accounts/get would be worse
+# than keeping the last known type.
+STICKY_SOURCE_FIELDS = frozenset({"accountType"})

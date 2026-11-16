@@ -9,7 +9,13 @@ from decimal import Decimal
 import pytest
 
 from core.budgets import summarize
-from core.plaid_items import account_view, new_plaid_item, plaid_item_view
+from core.plaid_items import (
+    account_types,
+    account_view,
+    excluded_from_spend,
+    new_plaid_item,
+    plaid_item_view,
+)
 from core.plaid_normalize import normalize
 from core.plaid_sync import (
     MAX_RESTARTS,
@@ -324,3 +330,26 @@ def test_no_pending_means_zero_pending_everywhere():
     assert result["perCategory"][0]["pendingSpentCents"] == 0
     assert result["totals"]["pendingSpentCents"] == 0
     assert result["totals"]["pendingCount"] == 0
+
+
+
+def test_rows_carry_their_account_type_so_loans_stay_excluded_after_a_disconnect():
+    accounts = [account_view({"account_id": "acc-1", "name": "Auto Loan", "mask": "5000",
+                              "type": "loan", "subtype": "auto", "balances": {}}),
+                account_view({"account_id": "acc-2", "name": "Checking", "mask": "0000",
+                              "type": "depository", "balances": {}})]
+    types = account_types(accounts)
+    assert types == {"acc-1": "loan", "acc-2": "depository"}
+
+    loan_row = normalize(plaid_txn(account_id="acc-1"), account_labels={}, item_id="i",
+                         plaid_env="sandbox", account_types=types)
+    checking_row = normalize(plaid_txn(account_id="acc-2"), account_labels={}, item_id="i",
+                             plaid_env="sandbox", account_types=types)
+    assert loan_row["accountType"] == "loan"
+    assert excluded_from_spend(loan_row)
+    assert not excluded_from_spend(checking_row)
+    # Unknown account → no type stamped, and the row counts.
+    unknown = normalize(plaid_txn(account_id="acc-9"), account_labels={}, item_id="i",
+                        plaid_env="sandbox", account_types=types)
+    assert "accountType" not in unknown
+    assert not excluded_from_spend(unknown)

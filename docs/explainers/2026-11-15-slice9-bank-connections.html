@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bank connections: Connect, Reconnect, Disconnect, and what counts as spend</title>
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1a1a1a; --accent: #b5541f; --muted: #6b6b6b;
+    --code-bg: #282c34; --code-fg: #e6e6e6; --callout-bg: #fff4e8; --border: #e0ddd6;
+  }
+  body { font-family: Georgia, 'Times New Roman', serif; background: var(--bg); color: var(--fg);
+    max-width: 820px; margin: 0 auto; padding: 2rem 1.5rem 6rem; line-height: 1.65; }
+  h1 { font-size: 1.9rem; border-bottom: 3px solid var(--accent); padding-bottom: .5rem; }
+  h2 { font-size: 1.4rem; margin-top: 3rem; color: var(--accent); }
+  h3 { font-size: 1.1rem; margin-top: 1.8rem; }
+  code { font-family: 'SF Mono', Consolas, monospace; background: #eee; padding: .1rem .3rem; border-radius: 3px; font-size: .92em; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.2rem; border-radius: 8px;
+    overflow-x: auto; white-space: pre-wrap; font-family: 'SF Mono', Consolas, monospace; font-size: .88rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout { background: var(--callout-bg); border-left: 4px solid var(--accent); padding: .9rem 1.2rem;
+    border-radius: 0 6px 6px 0; margin: 1.2rem 0; }
+  .toc { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc ul { margin: .3rem 0; }
+  .diagram { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem;
+    margin: 1.2rem 0; font-family: 'SF Mono', Consolas, monospace; font-size: .85rem; }
+  .flow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; justify-content: center; padding: .5rem 0; }
+  .box { border: 2px solid var(--accent); border-radius: 8px; padding: .6rem 1rem; background: #fdf6ee; text-align: center; min-width: 120px; }
+  .box.fail { border-color: #b91c1c; background: #fef2f2; }
+  .arrow { font-size: 1.4rem; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; }
+  th { background: #f0ede6; }
+  .quiz-q { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem 1.5rem; margin: 1.2rem 0; }
+  .quiz-opt { display: block; width: 100%; text-align: left; padding: .6rem 1rem; margin: .4rem 0;
+    border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; font-family: inherit; font-size: .95rem; }
+  .quiz-opt:hover { background: #f5f2ec; }
+  .feedback { display: none; margin-top: .6rem; padding: .6rem 1rem; border-radius: 6px; font-size: .9rem; }
+  .feedback.correct { background: #ecfdf3; color: #166534; border-left: 3px solid #16a34a; }
+  .feedback.incorrect { background: #fef2f2; color: #991b1b; border-left: 3px solid #dc2626; }
+  .badge { display: inline-block; font-size: .75rem; padding: .15rem .5rem; border-radius: 10px; font-family: sans-serif; }
+  .badge.new { background: #dcfce7; color: #166534; }
+  @media (max-width: 600px) { body { padding: 1rem; } .flow { flex-direction: column; } }
+</style>
+</head>
+<body>
+
+<h1>Bank connections: Connect, Reconnect, Disconnect, and what counts as spend</h1>
+<p style="color:var(--muted); margin-top:-.5rem;">Prepared 2026-11-16 · PR #62 · Slice 9 (ADR-014, ADR-015)</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ul>
+  <li><a href="#background">Background</a></li>
+  <li><a href="#intuition">Intuition</a></li>
+  <li><a href="#code">Code walkthrough</a></li>
+  <li><a href="#quiz">Quiz</a></li>
+</ul>
+</div>
+
+<h2 id="background">Background</h2>
+
+<p><em>Deep background — skip this layer if Plaid Link and Cognito are already familiar.</em></p>
+<p><strong>Plaid Link</strong> is a small app Plaid runs inside an iframe on your page. Your server asks Plaid for a short-lived <em>link token</em>; the browser opens Link with it; the user picks a bank and logs in <em>at Plaid</em>, never at Ledgerly; and Link hands the browser a one-time <em>public token</em>. The server swaps that for a long-lived <em>access token</em>, the real credential for one bank login, which Plaid calls an <em>Item</em>. Ledgerly keeps the access token in Secrets Manager and nowhere else, so the browser only ever holds the two disposable tokens.</p>
+<div class="flow"><div class="box">server: link token</div><div class="box">browser: Link iframe</div><div class="box">public token</div><div class="box">server: exchange</div><div class="box">access token → Secrets Manager</div></div>
+<p>Two Link behaviours matter for this PR. <strong>Update mode</strong>: when a bank login breaks (<code>ITEM_LOGIN_REQUIRED</code>), you mint a link token <em>for the existing Item</em> (pass its access token, no products). Link then only asks for the password, and returns <em>no</em> public token, because nothing needs exchanging; the old access token simply works again. Deleting and re-linking would instead create a second Item, billed separately. <strong>react-plaid-link</strong> wraps Link in a React hook, <code>usePlaidLink({token, onSuccess, onExit})</code>, exposing <code>ready</code> and <code>open</code>.</p>
+<p><strong>Cognito Hosted UI sessions.</strong> Signing in sets two sessions: tokens in the SPA's localStorage, and a cookie on Cognito's own domain. Logging out of only the first means the next "Log in" is silently answered by the cookie. Ending the second requires Cognito's <code>/logout</code> endpoint, which takes <code>client_id</code> and <code>logout_uri</code>, its own names, not the OIDC standard's.</p>
+<p><em>Narrow background — the Ledgerly code.</em> PR #61 built the backend: <code>api_plaid</code> (link token, exchange, sync start), the async <code>plaid_sync</code> worker (pulls <code>/transactions/sync</code>, writes ordinary <code>TXN#</code> rows plus categorization jobs), and per-Item <code>PLAIDITEM#</code> records (ADR-014). Everything downstream, from categorizer to cycles to dashboard, was untouched, as architecture §1.2 promised. This PR gives it a face, and on the way it hit two problems ADR-014 hadn't decided: loan payments counting as income, and fake Sandbox money inside the owner's real totals (ADR-015).</p>
+
+
+<h2 id="intuition">Intuition</h2>
+
+<p>The panel is a small state machine over one bank connection. Here is a single connection, First Platypus Bank, moving through it:</p>
+<div class="flow"><div class="box">Connect bank</div><div class="box">331 new</div><div class="box">Sync now → 0 new</div><div class="box fail">sync fails: ITEM_LOGIN_REQUIRED</div><div class="box">Reconnect (password only)</div><div class="box">Disconnect</div></div>
+<p>The interesting idea is in the middle. Reconnect must open Link <em>for the existing Item</em>. The bug the first blind review caught: react-plaid-link keeps the previous handler and reports <code>ready = true</code> while a new token is still loading. The panel had swapped in the update-mode token and auto-opened on <code>ready</code>, so it opened the <em>old</em> new-connection handler. The user would have created a second Item at Plaid while the panel believed it was repairing the first, skipping the exchange, so the new Item's token would never be stored. The fix gives every token its own component instance, <code>&lt;LinkSession key={token}&gt;</code>, so <code>ready</code> can only ever describe that token.</p>
+<p>The second idea is about what counts as spending. A loan account sees a $514 payment as money <em>in</em> (you owe less):</p>
+<table><tr><th>Account</th><th>Row</th><th>Amount</th><th>Counted?</th></tr>
+<tr><td>Checking ••1000</td><td>Auto loan payment</td><td>−$514.00</td><td>yes (the cash leaves here)</td></tr>
+<tr><td>Auto loan ••5000</td><td>Payment received</td><td>+$514.00</td><td><strong>no</strong>, <code>accountType = loan</code></td></tr></table>
+<p>Counting both sides nets to zero; counting only the loan side reads as income. So each Plaid row now carries its account's type, and the dashboard skips <code>loan</code> rows, saying how many it skipped rather than letting the totals quietly disagree with the list.</p>
+<p>The third idea is separation. Sandbox data now belongs to a second, dev-only Cognito user, so the <code>USER#&lt;sub&gt;</code> partition (ADR-006) keeps it away from the owner's real rows. That needs no filter anywhere.</p>
+
+
+<h2 id="code">Code walkthrough</h2>
+
+<h3>core/: the rules, AWS-free</h3>
+<p><code>plaid_items.py</code> adds <code>RECONNECT_ERROR_CODES</code> (only <code>ITEM_LOGIN_REQUIRED</code>), so the view can say <code>needsReconnect</code>, plus <code>account_types()</code> and <code>excluded_from_spend(txn)</code>. <code>plaid_normalize.normalize</code> stamps <code>accountType</code>, and it joins <code>SOURCE_FIELDS</code> (a Plaid <code>modified</code> may change it) and a new <code>STICKY_SOURCE_FIELDS</code> (it may never <em>remove</em> it). That stickiness took three review rounds to get right:</p>
+<pre>round 1: type read from the PLAIDITEM record   → disconnect deletes it → loans count again
+round 2: type stamped on each row             → a closed loan drops out of /accounts/get → the next modified removes it
+round 3: stored ∪ fresh types for one sync    → the stored list is replaced each sync → gone a sync later
+final:   accountType is sticky in the update  → set, never removed</pre>
+<p><code>budgets.summarize</code> skips <code>excluded_from_spend</code> rows and reports <code>excludedCount</code>. <code>plaid_purge.plan_sandbox_purge</code> decides which owner-partition records were Sandbox: <code>TXN#</code> with <code>source=plaid</code> and <code>plaidEnv=sandbox</code>, their <code>PLAIDTXN#</code> pointers, and their syncs. It refuses while any connection is linked, deletes pointers → syncs → rows (so a crash leaves a re-runnable state), and fingerprints the exact key set.</p>
+<h3>adapters/: Plaid and AWS calls</h3>
+<p><code>plaid.py</code>: <code>link_token_create(access_token=…)</code> for update mode (no <code>products</code>), <code>item_remove</code>, <code>sandbox_item_reset_login</code>. <code>secrets.delete_access_token</code> refuses unless the stored entry's <code>sub</code> is the caller's. <code>dynamo.py</code>: <code>set_plaid_item_error</code> / <code>REMOVE errorCode</code> on success, <code>delete_plaid_item</code>, and the sticky-field rule in the update path.</p>
+<h3>functions/: thin handlers</h3>
+<p><code>api_plaid</code> gains <code>GET /plaid/items</code>, <code>DELETE /plaid/items/{itemId}</code> and update-mode link tokens. Disconnect's order is the point: <strong>Plaid first</strong> (<code>/item/remove</code>; <code>ITEM_NOT_FOUND</code> means already gone), then the token, then the record. A failed remove changes nothing, so retrying is safe, and no Item is ever left live and billed with our side forgotten. <code>plaid_sync</code> records non-retryable Plaid errors on the Item. <code>api_cycles</code> is unchanged in shape, because the exclusion lives in <code>summarize</code>.</p>
+<h3>infra/</h3>
+<p>Two JWT-authorized routes and <code>DELETE</code> in CORS. <code>PlaidSandboxUser</code> is created only when the stage has Plaid; its logical ID contains "Plaid", so the existing CI check that prod has no Plaid resources covers it for free. <code>ops/</code> is excluded from the Lambda asset.</p>
+<h3>frontend/</h3>
+<p><code>BankConnectionsPanel</code>: pre-initialized Link, one keyed <code>LinkSession</code> per token, Sync now (polls the import, then reloads the dashboard at +20 s and +45 s while categorization runs), Reconnect, Disconnect, and <code>syncErrorCopy</code>, which gives every failure state a next step. The dashboard shows the pending share and the loan note. <code>auth.ts</code> builds Cognito's logout URL itself.</p>
+<div class="callout"><strong>Deployed ≠ working, honoured.</strong> Everything above was run on the deployed dev stack through the real UI: connect (331 rows, 330 categorized), sync 0, forced login failure → Reconnect, disconnect, a second persona, and refresh-driven added/modified/merged. Two bugs only the real browser found: the logout, and a locked-account message with no way forward.</div>
+
+
+<h2 id="quiz">Quiz</h2>
+
+<div class="quiz-q">
+<p><strong>Why must Reconnect use update mode instead of disconnecting and linking the bank again?</strong></p>
+<button class="quiz-opt" data-correct="false" data-explanation="Plaid allows it (and bills it); Ledgerly&#x27;s own duplicate check is what refuses it.">Plaid forbids linking the same institution twice.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Disconnect deliberately keeps transactions; it removes only the Item, token and record.">Disconnect deletes the owner&#x27;s transactions, so it must be avoided.</button>
+<button class="quiz-opt" data-correct="true" data-explanation="Update mode re-authenticates the same Item, so no new public token comes back and nothing needs exchanging.">Re-linking creates a second, separately billed Item; update mode repairs the existing Item and its access token keeps working.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Syncing is a separate call; update mode only repairs the login.">Update mode is the only way to fetch transactions after a failed sync.</button>
+</div>
+
+<div class="quiz-q">
+<p><strong>What made Reconnect able to open the wrong Link session?</strong></p>
+<button class="quiz-opt" data-correct="true" data-explanation="The fix keys one hook instance per token, so ready can only describe that token.">react-plaid-link kept the previous handler and reported ready=true while the new token loaded, so auto-open fired the old handler.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Tokens were minted per caller sub; the confusion was entirely client-side.">The server returned a link token for the wrong user.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="The danger was the opposite: a real new Item whose token was never exchanged.">The exchange endpoint accepted null public tokens.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Update-mode tokens last 30 minutes; expiry was never the issue.">Plaid&#x27;s update-mode tokens expire after 30 seconds.</button>
+</div>
+
+<div class="quiz-q">
+<p><strong>Why is accountType a sticky field (set by updates, never removed)?</strong></p>
+<button class="quiz-opt" data-correct="false" data-explanation="It can; the live run applied hundreds of modified entries.">Plaid never sends modified rows for loan accounts.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="CSV rows never carry accountType; stickiness is about Plaid rows keeping theirs.">It keeps CSV rows from being excluded.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="UpdateItem REMOVE works fine; the generic update path used it for other source fields.">DynamoDB cannot remove attributes from an item.</button>
+<button class="quiz-opt" data-correct="true" data-explanation="The stored account list is replaced every sync, so it can&#x27;t be the long-term memory; the row itself has to be.">A closed loan drops out of /accounts/get; without stickiness its next modified row would lose the type and its payment would count as income again.</button>
+</div>
+
+<div class="quiz-q">
+<p><strong>In what order does Disconnect act, and why?</strong></p>
+<button class="quiz-opt" data-correct="false" data-explanation="Disconnect deliberately keeps imported transactions.">Transactions first, so no orphaned rows remain.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Plaid and Secrets Manager can&#x27;t join a DynamoDB transaction; ordering is what makes it safe.">All three in one DynamoDB transaction.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="If the Plaid call then failed, the token needed to retry would already be gone.">Record first, then token, then Plaid, so the UI updates fastest.</button>
+<button class="quiz-opt" data-correct="true" data-explanation="Deleting our side first could leave a live, billed Item at Plaid that Ledgerly no longer knows how to remove.">Plaid /item/remove first, then delete the token, then the record, so a failed remove leaves everything in place to retry.</button>
+</div>
+
+<div class="quiz-q">
+<p><strong>Why does the purge delete pointers before transaction rows?</strong></p>
+<button class="quiz-opt" data-correct="false" data-explanation="DynamoDB has no parent/child constraints.">DynamoDB requires deleting child items before parents.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="Pointers are tiny; ordering is about re-runnability, not capacity.">Pointers are larger, so deleting them first frees capacity.</button>
+<button class="quiz-opt" data-correct="true" data-explanation="Pointers carry no provenance of their own, so rows go last and each phase is flushed before the next.">A row is what proves its pointer and sync are Sandbox; deleting rows first and crashing would strand pointers no re-run could identify.</button>
+<button class="quiz-opt" data-correct="false" data-explanation="The fingerprint covers every selected key.">The fingerprint only covers pointers.</button>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-q').forEach(q => {
+  q.querySelectorAll('.quiz-opt').forEach(opt => {
+    opt.addEventListener('click', () => {
+      const correct = opt.dataset.correct === 'true';
+      const why = opt.dataset.explanation || '';
+      let fb = opt.nextElementSibling;
+      if (!fb || !fb.classList.contains('feedback')) {
+        fb = document.createElement('div');
+        fb.className = 'feedback';
+        opt.insertAdjacentElement('afterend', fb);
+      }
+      const mark = correct ? '\u2705 Correct.' : '\u274c Not quite.';
+      fb.textContent = why ? mark + ' ' + why
+                           : mark + (correct ? '' : ' Reread the section above.');
+      fb.className = 'feedback ' + (correct ? 'correct' : 'incorrect');
+      fb.style.display = 'block';
+    });
+  });
+});
+</script>
+
+</body>
+</html>

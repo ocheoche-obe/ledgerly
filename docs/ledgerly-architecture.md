@@ -1,8 +1,8 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.7
+**Version:** 1.8
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
-**Last updated:** 2026-08-07
+**Last updated:** 2026-11-16
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
 > significant choice recorded here has a matching ADR in `ledgerly-adl.md`
@@ -145,9 +145,12 @@ diagram above is authoritative if they ever disagree):
   protection on in `prod`.
 - **Ingest** — CSV upload via **presigned S3 URL** (the API hands the browser a URL; the
   file never transits Lambda), S3 event triggers the import Lambda. This is the pluggable
-  seam FR-2.3 requires: a future Plaid source is just another producer that writes
-  transactions and enqueues categorization jobs — everything downstream is unchanged.
-- **AI** — `Categorizer` interface → merchant rules → Claude Opus 4.8 on Bedrock with
+  seam FR-2.3 requires, and Plaid now uses it (ADR-014, `dev` + Sandbox only): the
+  `api_plaid` Lambda links a bank and starts a sync; the async `plaid_sync` worker pulls
+  `/transactions/sync` and writes ordinary `TXN#` rows plus categorization jobs — everything
+  downstream is unchanged. Two downstream additions only: pending rows are flagged and shown,
+  and rows from **loan accounts** are left out of the dashboard figures (ADR-015).
+- **AI** — `Categorizer` interface → merchant rules → Claude Sonnet 4.6 on Bedrock with
   structured output (ADR-008). IAM-authenticated; no secrets.
 - **Async** — SQS + DLQ between import and categorization (ADR-009). FR-3.5 holds by
   construction: transactions are durably persisted *before* any categorization is
@@ -159,7 +162,9 @@ diagram above is authoritative if they ever disagree):
 | Not built | Trigger to add |
 |---|---|
 | EventBridge event bus | First second subscriber (alerts, trends, recurring detection) — ADR-009 records this |
-| Plaid ingest source | v1 success criterion 1 met + owner appetite to revise cost ceiling (ADR required, NFR-1.1) |
+| Plaid **Production** (real banks) | ADR required (cost ceiling NFR-1.1, OAuth redirect + Plaid Production prerequisites, CSV/Plaid cross-source dedupe). Sandbox ingest exists in `dev` since Slice 9 (ADR-014) |
+| Plaid webhooks (`SYNC_UPDATES_AVAILABLE`) | Replaces the owner-accepted manual "Sync now" stopgap; needs a public receiver with JWT verification |
+| Transfer category (card payments, savings moves are not spend) | Slice 7 — owner-deferred 2026-11-15 (ADR-015) |
 | Custom domain / Route53 | Owner wants a memorable URL; CloudFront default domain is fine to start |
 | Pre-aggregated cycle summary items | Dashboard aggregation in Lambda exceeds ~2s (NFR-2.1) — not plausible at hundreds of tx/cycle |
 | Caching layer (DAX / CloudFront API caching) | Measured latency problem, none expected |
@@ -250,6 +255,13 @@ User (Cognito sub) 1 ──── 1 Settings
 | Import | `IMPORT#<isoTimestamp>#<ulid>` | counts added/duplicate/failed, status, filename, `accountLabel` (owner-confirmed at upload, ADR-013) |
 | File hash | `FILEHASH#<sha256>` | conditional put = file-level idempotency (AP 12) |
 | Merchant rule | `RULE#<normalizedMerchant>` | `categoryId`, `source: correction`, `hitCount`, `updatedAt` |
+| Plaid connection (Item) | `PLAIDITEM#<itemId>` | institution, accounts (with Plaid `type` and last-synced balances), sync `cursor`, `errorCode`/`errorAt` from the last failed sync. **No access token** — that lives in Secrets Manager (§4.3) |
+| Plaid pointer | `PLAIDTXN#<transaction_id>` | → the date in that row's `sk`, so `removed`/`modified` (which carry only an ID) find the row. Written in one transaction with the row |
+
+Plaid rows are ordinary `Transaction` items with `txnId` = Plaid's `transaction_id`, no
+`balanceCents`, and provenance `source=plaid`, `plaidEnv`, `plaidItemId`, `plaidAccountId`,
+`pending`, and `accountType` (Plaid's account type, stamped at sync and never removed by a later
+update; `loan` rows are excluded from the dashboard, ADR-015).
 
 **GSI1 — category drill-down** (AP 8):
 `gsi1pk = USER#<sub>#CAT#<categoryId>`, `gsi1sk = TXN#<date>#<txnId>`.
@@ -286,6 +298,14 @@ escape hatch is recorded in §1.3.
 | — | presigned upload | `POST /imports` → `{uploadUrl, importId}` |
 | — | list cycles for the picker (AP 15) | `GET /cycles` |
 | 6 + enqueue | re-drive categorization over a window ([B-7]) | `POST /transactions/recategorize` |
+| — | Plaid Link token: new connection, or **update mode** with `{itemId}` (reconnect) | `POST /plaid/link-token` |
+| — | exchange the public token, store the connection, start the first sync | `POST /plaid/exchange` |
+| 11 + async worker | start a sync of one or all connections (manual stopgap for webhooks) | `POST /plaid/sync` |
+| — | `Query begins_with(sk,'PLAIDITEM#')` — connections for the panel | `GET /plaid/items` |
+| — | `/item/remove` at Plaid, delete the token, then `DeleteItem PLAIDITEM#…` (rows kept) | `DELETE /plaid/items/{itemId}` |
+
+The five `/plaid/*` routes exist **only in `dev`** (`prod` synthesizes without them; CI
+asserts it). Paths confirmed by the owner 2026-11-16.
 
 All handlers derive `<sub>` exclusively from the JWT claims that API Gateway's authorizer
 verified (FR-1.3); no route accepts a user identifier in the payload.
@@ -609,3 +629,4 @@ resolves it.)*
 | 1.5 | 2026-07-21 | Slice-5 categorization pipeline **implemented** as designed (§3.2, §4.5) — no design change to the async shape (SQS→categorizer→Bedrock + DLQ; the §1 diagram already depicted it). Impl details recorded under ADR-008: Bedrock is called via **boto3 `invoke_model`** (not the `anthropic` SDK — zero-runtime-deps) with a forced-tool structured output, and Opus 4.8 is **INFERENCE_PROFILE-only**, so the runtime model id is `us.anthropic.claude-opus-4-8` and the categorizer's IAM grant covers the inference-profile ARN + the underlying foundation-model ARN. `TXN#` items gain `confidence`/`needsReview` + GSI1 (category) / GSI2 (sparse review) keys on categorization, exactly as §2.6 sketched. |
 | 1.6 | 2026-08-07 | Slice-6 budgets & dashboard **implemented** as designed (§2.2 AP 4/5/15, §3.3) — no change to the data model: budgets still key `BUDGET#<cycleId>#<categoryId>`, cycle-major. Two §2.5 route-shape notes: (1) the API addresses a cycle by `current` or an **ISO date inside it** (`{cycleRef}`), never the raw cycle ID, because the ID's `#` would have to survive URL encoding and a mis-encoded ID would silently address a nonexistent cycle — the server derives the canonical ID from the cadence history; (2) new `POST /transactions/recategorize` re-drives categorization over a window ([B-7]), the path that never existed because the importer only enqueues newly-added rows. §3.3 gains the aggregation semantics (spend = negated net so refunds net down; a synthetic Uncategorized row so unfiled money can't vanish; `remaining` counts only budgeted categories; `truncated` when the single-page read hits its cap). AP 15 corrected: the picker needs one `Limit=1` Query for the earliest transaction, not settings alone. |
 | 1.7 | 2026-11-15 | Slice-9 Plaid Sandbox ingest **backend implemented** per ADR-014 (`dev` only; `prod` synthesizes with no Plaid resources). §0/§4.3: "no runtime secrets" replaced — two Secrets Manager secrets for Plaid (owner-created API keys, stack-created access tokens). New `PlaidConstruct` (`api_plaid` + async `plaid_sync` worker), routes `POST /plaid/link-token` / `/plaid/exchange` / `/plaid/sync`, items `PLAIDITEM#<itemId>` and pointer `PLAIDTXN#<transaction_id>`; Plaid rows are ordinary `TXN#` items (`txnId` = Plaid's `transaction_id`, `pending` flag, no `balanceCents`). Diagram re-rendered (Plaid + Secrets Manager; Bedrock label corrected to Sonnet 4.6). §1.2/§1.3/§2.4/§2.5 prose still to be brought current at slice wrap. |
+| 1.8 | 2026-11-16 | Slice 9 complete: §1.2/§1.3/§2.4/§2.5 brought current for Plaid (Sandbox, `dev` only). New routes `GET /plaid/items`, `DELETE /plaid/items/{itemId}` and update-mode `POST /plaid/link-token {itemId}` (owner-confirmed paths); `PLAIDITEM#`/`PLAIDTXN#` items documented; `accountType` on Plaid rows with `loan` rows excluded from the dashboard (ADR-015); Sandbox data under a separate dev-only Cognito user (ADR-015). §1.2 Bedrock model corrected to Sonnet 4.6. No system-shape change, so no diagram re-render. |

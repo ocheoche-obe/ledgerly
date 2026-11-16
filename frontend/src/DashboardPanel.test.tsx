@@ -112,4 +112,39 @@ describe("DashboardPanel", () => {
 
     expect(await screen.findByText(/153 transactions are still uncategorized/)).toBeTruthy();
   });
+
+  it("shows how much of the spend is still pending, overall and per category", async () => {
+    const withPending: CycleSummary = {
+      ...SUMMARY,
+      perCategory: SUMMARY.perCategory.map((r) =>
+        r.categoryId === "cat-dine" ? { ...r, pendingSpentCents: 4200 } : { ...r, pendingSpentCents: 0 },
+      ),
+      totals: { ...SUMMARY.totals, pendingSpentCents: 4200, pendingCount: 2 },
+    };
+    render(
+      <DashboardPanel
+        api={fakeApi({ getCycleSummary: vi.fn().mockResolvedValue(withPending) })}
+        onError={vi.fn()}
+        reloadKey={0}
+      />,
+    );
+    expect(await screen.findByText(/2 pending transactions/)).toBeTruthy();
+    expect(screen.getByText("$42.00 pending")).toBeTruthy();
+    expect(screen.getAllByText(/pending$/)).toHaveLength(1); // only the row that has some
+  });
+
+  it("says when loan-account transactions are left out of the figures", async () => {
+    const withExcluded: CycleSummary = {
+      ...SUMMARY,
+      totals: { ...SUMMARY.totals, excludedCount: 35 },
+    };
+    render(
+      <DashboardPanel
+        api={fakeApi({ getCycleSummary: vi.fn().mockResolvedValue(withExcluded) })}
+        onError={vi.fn()}
+        reloadKey={0}
+      />,
+    );
+    expect(await screen.findByText(/35 loan-account transactions aren't counted here/)).toBeTruthy();
+  });
 });

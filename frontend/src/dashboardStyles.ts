@@ -80,6 +80,7 @@ export const dashboardCss = `
   font-size: 0.85rem;
 }
 .ldg-note-warn { background: var(--over-bg); color: var(--over); }
+.ldg-note-pending { background: #f1f5f9; color: var(--ink); }
 
 /* --- category rows ---------------------------------------------------------------- */
 .ldg-rows { list-style: none; margin: 0; padding: 0; }
@@ -123,6 +124,13 @@ export const dashboardCss = `
 .ldg-spent { font-weight: 600; }
 .ldg-left { color: var(--muted); font-size: 0.82rem; }
 .ldg-income { color: var(--under); }
+.ldg-pending {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted);
+  font-style: italic;
+}
 .ldg-over { color: var(--over); }
 
 .ldg-budget { text-align: right; }

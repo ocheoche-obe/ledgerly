@@ -37,12 +37,13 @@ slice.
 
 | Task | Why it matters | Where | State |
 |------|----------------|-------|-------|
-| Create the AWS secret `ledgerly/dev/plaid/api-keys` (us-east-1, account 816020558700) with value `{"client_id": "...", "secret": "<Sandbox secret>"}` (owner does this; never pasted into chat, a file in the repo, or CDK) | Without it every Plaid call fails with invalid keys (GUIDE-001/021) | Keys: https://dashboard.plaid.com/developers/keys → AWS Secrets Manager, `ledgerly-dev` profile | needs_human (can be done before or after the stack deploys) |
+| Create the AWS secret `ledgerly/dev/plaid/api-keys` (us-east-1, account 816020558700) with value `{"client_id": "...", "secret": "<Sandbox secret>"}` (owner does this; never pasted into chat, a file in the repo, or CDK) | Without it every Plaid call fails with invalid keys (GUIDE-001/021) | Keys: https://dashboard.plaid.com/developers/keys → AWS Secrets Manager, `ledgerly-dev` profile | reported_done (owner created it; never read into context). Evidence it is right: live Sandbox `/link/token/create`, `/item/public_token/exchange`, `/transactions/sync`, `/item/remove` and `/sandbox/item/reset_login` all succeeded on dev 2026-11-16 |
 | Sandbox access to `transactions` | Required product | Dashboard → Products | verified (2026-11-14) |
 | Webhook receiver | Item/transaction webhooks are set per Item in code, not here; webhooks are out of scope this slice (TASK-003) | — | not_applicable |
-| Register an OAuth redirect URI | Chase connects by OAuth; without it Chase is silently absent or breaks mid-flow (OAUTH-001). Not needed for non-OAuth Sandbox banks | https://dashboard.plaid.com/developers/api | needs_human — before Production, not this slice (list is empty today) |
-| Production prerequisites: company profile, data-security questionnaire (gates Chase) | Long lead time; cannot be read through the tools (TASK-006/009) | https://dashboard.plaid.com | cannot_verify — before Production |
-| Confirm what Plaid bills for a Production `transactions` Item on this account | Dashboard shows Production authorized and **no trial products**; NFR-1.1 needs a number before any real Item | Dashboard → Settings → Team → Products / billing | needs_human — before Production |
+| Register an OAuth redirect URI | Chase connects by OAuth; without it Chase is silently absent or breaks mid-flow (OAUTH-001). Not needed for non-OAuth Sandbox banks | https://dashboard.plaid.com/developers/api | not_applicable this slice: Sandbox only, tested against the non-OAuth First Platypus Bank. Becomes needs_human before Production (Chase is OAuth) |
+| Production prerequisites: company profile, data-security questionnaire (gates Chase) | Long lead time; cannot be read through the tools (TASK-006/009) | https://dashboard.plaid.com | not_applicable this slice (Sandbox only); cannot_verify through the tools, and needed before Production |
+| Confirm what Plaid bills for a Production `transactions` Item on this account | Dashboard shows Production authorized and **no trial products**; NFR-1.1 needs a number before any real Item | Dashboard → Settings → Team → Products / billing | not_applicable this slice (Sandbox is free); needs_human before any Production Item (NFR-1.1) |
+| Move "Sync now" to `SYNC_UPDATES_AVAILABLE` webhooks | Owner accepted manual Sync now as a stopgap (WEBHOOK-005); a public receiver with JWT verification is the follow-up | Follow-up ADR + slice; nothing in the Dashboard (Item webhooks are set per Item in `/link/token/create`) | not_applicable this slice: owner-accepted stopgap, recorded under Open questions |
 
 ## Implementation checklist
 
@@ -51,7 +52,8 @@ ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run a
 - [x] `adapters/plaid.py` — `/link/token/create`, `/item/public_token/exchange`,
       `/transactions/sync`, `/accounts/get` (keys in headers GUIDE-001; errors carry code/type/
       request_id only GUIDE-006, ITEM-002; backoff + jitter ITEM-004/013; Sandbox host only)
-- [ ] `/item/remove` (disconnect, ITEM-005) — not built yet; goes with the SPA panel
+- [x] `/item/remove` (disconnect, ITEM-005) — `DELETE /plaid/items/{itemId}`: Plaid first,
+      then the token, then the record; transactions kept (PR #62)
 - [x] `core/plaid_normalize.py` + tests (sign flip TXN-005, null merchant TXN-013, pending flag)
 - [x] `core/plaid_sync.py` + `plaid_sync` worker (buffer all pages, restart from the starting
       cursor on mutation, count 500, cursor saved last: TXN-002, TXN-007, TXN-011, DATA-007 —
@@ -65,11 +67,24 @@ ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run a
 - [x] Sandbox test actions (direct Lambda invoke only, refused outside Sandbox):
       `sandbox_link` (SANDBOX-003) and `sandbox_refresh` (TXN-014). `/transactions/refresh` is a
       billed add-on in Production (GUIDE-016) and is reachable only through that test action.
-- [ ] SPA "Bank connection" panel (WEB-001/002/003, WEB-020/021)
+- [x] SPA "Bank connections" panel (WEB-001/002/003, WEB-020/021): pre-initialized Link,
+      Sync now, update-mode Reconnect on `ITEM_LOGIN_REQUIRED`, Disconnect (PR #62)
+- [x] Loan accounts left out of the dashboard figures (owner decision below)
+- [x] Dev-only Cognito Sandbox test user `PlaidSandboxUser` (owner decision below)
+- [x] Deployed to dev and run live (2026-11-16; acceptance round 1 PASS)
 
 ## Acceptance
 
-- Round 0: not run.
+- Round 1 (2026-11-16, commit after `fix(slice9): every failed-sync state names a next step`):
+  **PASS** (CHECK-006/007 not_applicable). Evidence from a live run on the deployed dev stack
+  through the real UI as the Cognito Sandbox test user: link → exchange → sync (331 rows,
+  `user_transactions_dynamic`), Sync now 0 new, reset_login → Reconnect in update mode (no
+  exchange) → 0 new, Disconnect; second persona `user_good` (48 rows). Recorded deviations:
+  Plaid `personal_finance_category` unused (owner's LLM categorizer, ADR-008; input for the
+  Slice 7 Transfer category); no "still importing history" state; Link exit metadata not
+  persisted. Named goal-fit gap: transfers between the owner's own accounts (card payments,
+  CD/savings deposits) still count as spend — the Transfer category, deferred to Slice 7.
+  Fixed during the round: Cognito logout (pre-existing), failed-sync copy for ITEM_LOCKED.
 
 ## Maintenance
 
@@ -80,14 +95,70 @@ only to the code as it was verified — later changes invalidate it.
 
 ## How to test
 
-To be written with the code. Planned journey: sign in to the dev SPA → Bank connection → connect
-First Platypus Bank with `user_good` / `pass_good` → transactions appear and categorize → Sync now
-adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
+Always as the **dev Sandbox user** (`…+sandbox@gmail.com`), never the owner's account (ADR-015).
+
+1. **UI (Playwright, headed):** sign in → Bank connections → Connect bank → skip the phone step →
+   search "Platypus" (type it; a pasted value doesn't trigger search) → **First Platypus Bank**
+   (the non-OAuth one) → `user_transactions_dynamic` or `user_good` / `pass_good` → Share data →
+   "Finish without saving". Expect "N new", accounts listed, categories filling in within ~90 s.
+2. **Sync now** → "0 new · 0 unchanged".
+3. **Reconnect:** direct-invoke `ledgerly-dev-api-plaid` with
+   `{"action": "sandbox_reset_login", "sub": <sandbox sub>, "itemId": ...}` → Sync now shows
+   ITEM_LOGIN_REQUIRED + Reconnect → Reconnect → password only → no `/plaid/exchange` call.
+4. **Lifecycle (added/modified/removed):** `{"action": "sandbox_refresh", ...}` then sync; the
+   worker log (`PlaidSyncLogs`) reports `added`, `modified`, `merged` (pending→posted).
+   Without a browser, `POST /plaid/sync` can be driven by direct-invoking the Lambda with an
+   API-Gateway-shaped event carrying the Sandbox user's `sub` (IAM-only; dev only).
+5. **Disconnect** → confirm → "No banks connected yet"; dashboard still excludes loan rows.
+6. A second connection at the **same** institution is refused (409) by design — use Tartan Bank
+   (`ins_109511`) for a second persona.
 
 ## Decisions made
 
 - 2026-11-15 (owner): ADR-014 accepted as written. Pending transactions count toward "spent".
   Route paths `/plaid/link-token`, `/plaid/exchange`, `/plaid/sync` stand (GUIDE-020).
+- 2026-11-15 (owner): **Loan payments are transfers, not spend.** Accounts of Plaid type `loan`
+  are left out of every dashboard figure. The type is stamped on each row at sync time
+  (`accountType`), so loan rows stay out after a disconnect too; the dashboard says how many
+  rows it left out, and loan balances stay on Bank connections. A "Transfer"
+  category for card payments etc. waits for Slice 7.
+- 2026-11-15 (owner): **Sandbox data lives under its own Cognito user** (`PlaidSandboxUser`,
+  dev only, a `+sandbox` plus-address of the owner's email), isolated by the `USER#<sub>`
+  partition (ADR-006). The Sandbox rows already in the owner's partition are deleted with
+  `backend/ops/purge_plaid_sandbox.py` — approved, but **not before the deploy is done and the
+  live checks are ready** (owner's condition).
+- 2026-11-16 (owner): route paths `GET /plaid/items` and `DELETE /plaid/items/{itemId}`
+  confirmed as built (GUIDE-020); update mode is `POST /plaid/link-token {itemId}`.
+
+## Runbook: move Sandbox off the owner's partition (owner-approved, not yet run)
+
+Dry run 2026-11-15 (read-only) on the owner's partition: **701 items**, fingerprint
+`d703a6664435`, selected — 349 Sandbox
+transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 → 2026-11-15;
+0 Plaid-looking items left alone. Kept: 153 Chase CSV rows (Jun–Jul), 8 Slice-5 smoke rows
+(Aug), 15 categories, 4 CSV imports, the profile. PITR is enabled (35 days) and is the undo.
+
+1. Owner: deploy `Ledgerly-dev` from the PR branch. This creates the Sandbox user; Cognito
+   emails its temporary password to the `+sandbox` address.
+2. Logged in as the owner, **Disconnect** First Platypus Bank in the new panel (live test of
+   `/item/remove`). The purge refuses to run while any connection is still linked.
+3. Dry run: `cd backend && AWS_PROFILE=ledgerly-dev .venv/bin/python -m ops.purge_plaid_sandbox
+   --sub <owner sub>`. Expect 701 items. The 2026-11-15 fingerprint was computed with the
+   connection record set aside (the script itself refuses while it exists), so **the
+   fingerprint this step prints, after the disconnect, is the one to use**. A count other
+   than 701 is a reason to stop and look.
+4. Execute: same command plus `--execute --selection <fingerprint>`. It writes a JSON manifest
+   of every item to the temp directory first, deletes pointers → syncs → rows (re-runnable if
+   it dies partway), then re-plans to confirm 0 remain.
+5. Owner logs in once as the Sandbox user (sets its password; Claude never sees it). Live test
+   there: connect First Platypus as `user_transactions_dynamic` and a second institution as
+   `user_good` (it has the loan accounts), Sync now, Reconnect via the `sandbox_reset_login`
+   invoke, Disconnect, and check that the dashboard leaves loan rows out.
+6. `build_check_acceptance`, then `/wrap-slice`.
+
+Note: `accountType` (which keeps loan rows out of the dashboard) is stamped from this deploy
+on; rows synced earlier lack it and are not backfilled. The only such rows are the Sandbox
+rows this runbook deletes, so nothing needs a backfill.
 
 ## Open questions
 

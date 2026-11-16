@@ -43,8 +43,13 @@ export interface ImportSummary {
   importId: string;
   filename: string;
   accountLabel: string;
+  /** "csv" for a file upload, "plaid" for a bank sync (ADR-014). */
+  source?: "csv" | "plaid";
   status: ImportStatus;
   added: number;
+  /** Plaid syncs only: rows Plaid changed (incl. pending charges that posted) / deleted. */
+  modified?: number;
+  removed?: number;
   duplicate: number;
   failed: number;
   errors: { line?: number; error: string }[];
@@ -74,6 +79,9 @@ export interface Transaction {
   confidence: number | null;
   needsReview: boolean;
   importId: string;
+  /** A Plaid charge that hasn't posted yet: its amount can still change, or it can vanish. */
+  pending?: boolean;
+  source?: "csv" | "plaid";
 }
 
 // --- budgets & dashboard (Slice 6, FR-4.3 / FR-5) --------------------------------------
@@ -86,6 +94,8 @@ export interface CategorySummary {
   name: string;
   budgetCents: number | null;
   spentCents: number;
+  /** The part of spentCents that is still pending at the bank (already included in it). */
+  pendingSpentCents?: number;
   netCents: number;
   transactionCount: number;
   remainingCents: number | null;
@@ -102,6 +112,11 @@ export interface CycleTotals {
   remainingCents: number;
   transactionCount: number;
   uncategorizedCount: number;
+  /** Already included in the figures above — the part of them that is not final yet. */
+  pendingSpentCents?: number;
+  pendingCount?: number;
+  /** Loan-account transactions in this window that none of the figures include. */
+  excludedCount?: number;
   truncated?: boolean;
 }
 
@@ -130,9 +145,78 @@ export interface RecategorizeResult {
   message?: string;
 }
 
+// --- bank connections (Plaid Sandbox, Slice 9 / ADR-014) -------------------------------
+
+// One account at a connected bank. Balances are Plaid's *cached* figures as of the last sync,
+// not a real-time balance; null when the bank doesn't report one.
+export interface BankAccount {
+  plaidAccountId: string;
+  accountId: string; // the label its transactions carry, e.g. "plaid-checking-0000"
+  name: string;
+  officialName: string;
+  mask: string;
+  type: string;
+  subtype: string;
+  balanceCurrentCents: number | null;
+  balanceAvailableCents: number | null;
+  currency: string;
+}
+
+// A connected institution (a Plaid "Item"). The browser never sees an access token — only this.
+export interface BankConnection {
+  itemId: string;
+  institutionId: string;
+  institutionName: string;
+  accounts: BankAccount[];
+  plaidEnv: string;
+  createdAt: string;
+  lastSyncedAt: string; // "" until the first sync completes
+  errorCode: string; // Plaid error from the last failed sync; "" when healthy
+  errorAt: string;
+  needsReconnect: boolean; // the fix is logging in again (Link update mode)
+}
+
+export interface LinkToken {
+  linkToken: string;
+  expiration: string;
+  mode: "link" | "update";
+}
+
+// What Link's onSuccess hands us, forwarded so the server can label, dedupe and support-debug
+// the connection. The public token is single-use and is exchanged server-side immediately.
+export interface ExchangeRequest {
+  publicToken: string;
+  institution: { id: string; name: string } | null;
+  linkSessionId: string;
+}
+
+export interface ExchangedConnection extends BankConnection {
+  importId: string; // the first sync, started automatically
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
+  }
+}
+
+const POLL_MS = 1500;
+const POLL_TIMEOUT_MS = 90_000;
+
+// Poll GET /imports/{id} until it reports a terminal status (or the deadline passes, in which
+// case the last view is returned as-is). Serves both CSV imports and Plaid syncs.
+export async function pollImport(
+  api: Api,
+  importId: string,
+  onUpdate?: (view: ImportSummary) => void,
+  { intervalMs = POLL_MS, timeoutMs = POLL_TIMEOUT_MS } = {},
+): Promise<ImportSummary> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const view = await api.getImport(importId);
+    onUpdate?.(view);
+    if (view.done || Date.now() > deadline) return view;
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
 
@@ -255,6 +339,39 @@ export function makeApi(apiUrl: string, token: string) {
         method: "POST",
         body: JSON.stringify({ from, to, includeCategorized }),
       }),
+
+    // --- bank connections (Plaid, dev stage only — these routes 404 where Plaid is off) ---
+
+    listBankConnections: () =>
+      request<{ items: BankConnection[] }>("/plaid/items").then((r) => r.items),
+
+    // A Link token for connecting a new bank, or — with itemId — for repairing an existing
+    // connection's login (update mode). The server holds the access token; we never do.
+    createLinkToken: (itemId?: string) =>
+      request<LinkToken>("/plaid/link-token", {
+        method: "POST",
+        body: JSON.stringify(itemId ? { itemId } : {}),
+      }),
+
+    exchangePublicToken: (req: ExchangeRequest) =>
+      request<ExchangedConnection>("/plaid/exchange", {
+        method: "POST",
+        body: JSON.stringify(req),
+      }),
+
+    // Start a sync for one connection (or all). Returns import IDs to poll; the work is async.
+    syncBank: (itemId?: string) =>
+      request<{ imports: { itemId: string; importId: string }[] }>("/plaid/sync", {
+        method: "POST",
+        body: JSON.stringify(itemId ? { itemId } : {}),
+      }),
+
+    // Ends the connection at Plaid and forgets it. Transactions already synced are kept.
+    disconnectBank: (itemId: string) =>
+      request<{ itemId: string; disconnected: boolean }>(
+        `/plaid/items/${encodeURIComponent(itemId)}`,
+        { method: "DELETE" },
+      ),
   };
 }
 

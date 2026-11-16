@@ -129,22 +129,38 @@ class PlaidClient:
 
     # --- Link ---------------------------------------------------------------------------
 
-    def link_token_create(self, *, client_user_id: str) -> dict:
+    def link_token_create(self, *, client_user_id: str, access_token: str | None = None) -> dict:
         """``/link/token/create`` → ``{link_token, expiration, request_id}``.
 
         ``transactions`` is the only required product, so no institution is filtered out of
         Link for lacking anything else. ``identity`` is consented but not requested, fetched
         or billed, so account-ownership checks can be added later without sending the owner
         back through Link.
+
+        **Update mode** (``access_token`` given): re-opens Link on an *existing* Item to repair
+        a broken login. No products are sent — the Item already has them, and listing products
+        in update mode asks for additional consent instead of a repair. Link then returns no
+        new public token, so nothing is exchanged afterwards and the access token is unchanged.
+        An update-mode token lives 30 minutes rather than 4 hours.
         """
-        return self._post("/link/token/create", {
+        body: dict = {
             "client_name": "Ledgerly",
             "language": "en",
             "country_codes": ["US"],
             "user": {"client_user_id": client_user_id},
-            "products": ["transactions"],
-            "additional_consented_products": ["identity"],
-        })
+        }
+        if access_token:
+            body["access_token"] = access_token
+        else:
+            body["products"] = ["transactions"]
+            body["additional_consented_products"] = ["identity"]
+        return self._post("/link/token/create", body)
+
+    def item_remove(self, *, access_token: str) -> dict:
+        """``/item/remove`` → ``{request_id}``. Ends the Item at Plaid: the access token stops
+        working and billing for it stops. Deleting only Ledgerly's own record would leave the
+        connection live (and, in Production, billed)."""
+        return self._post("/item/remove", {"access_token": access_token})
 
     def item_public_token_exchange(self, *, public_token: str) -> dict:
         """``/item/public_token/exchange`` → ``{access_token, item_id, request_id}``.
@@ -188,6 +204,11 @@ class PlaidClient:
             "initial_products": ["transactions"],
             "options": {"override_username": username, "override_password": password},
         })
+
+    def sandbox_item_reset_login(self, *, access_token: str) -> dict:
+        """``/sandbox/item/reset_login`` — puts a Sandbox Item into ``ITEM_LOGIN_REQUIRED`` so
+        the reconnect (update mode) path can be exercised end to end."""
+        return self._post("/sandbox/item/reset_login", {"access_token": access_token})
 
     def transactions_refresh(self, *, access_token: str) -> dict:
         """``/transactions/refresh`` — in Sandbox, makes the dynamic test user generate new

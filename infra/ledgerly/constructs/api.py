@@ -16,6 +16,7 @@ any Lambda runs — architecture §3.5):
   PUT       /cycles/{cycleRef}/budgets/{categoryId}
                              → cycles Lambda (set/clear a budget, AP 5 / FR-4.3)
   POST      /plaid/link-token, /plaid/exchange, /plaid/sync
+  GET       /plaid/items · DELETE /plaid/items/{itemId}
                              → Plaid Lambda (bank connection + sync, ADR-014) — dev only
 
 Each Lambda gets least privilege: read/write on the one table only — nothing else, no `*`
@@ -126,6 +127,7 @@ class ApiConstruct(Construct):
                     apigwv2.CorsHttpMethod.POST,
                     apigwv2.CorsHttpMethod.PATCH,
                     apigwv2.CorsHttpMethod.PUT,
+                    apigwv2.CorsHttpMethod.DELETE,  # DELETE /plaid/items/{itemId} (disconnect)
                     apigwv2.CorsHttpMethod.OPTIONS,
                 ],
                 allow_headers=["authorization", "content-type"],
@@ -211,6 +213,17 @@ class ApiConstruct(Construct):
                 self.http_api.add_routes(
                     path=path,
                     methods=[apigwv2.HttpMethod.POST],
+                    integration=integrations.HttpLambdaIntegration(name, plaid_fn),
+                    authorizer=authorizer,
+                )
+            # The connections panel: list, and disconnect (which calls Plaid's /item/remove).
+            for path, method, name in (
+                ("/plaid/items", apigwv2.HttpMethod.GET, "PlaidItemsIntegration"),
+                ("/plaid/items/{itemId}", apigwv2.HttpMethod.DELETE, "PlaidItemIntegration"),
+            ):
+                self.http_api.add_routes(
+                    path=path,
+                    methods=[method],
                     integration=integrations.HttpLambdaIntegration(name, plaid_fn),
                     authorizer=authorizer,
                 )

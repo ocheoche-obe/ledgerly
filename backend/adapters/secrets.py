@@ -100,6 +100,24 @@ def store_access_token(sub: str, item_id: str, access_token: str) -> None:
     items = _items(document)
     items[item_id] = {"sub": sub, "accessToken": access_token}
     document["items"] = items
+    _write_tokens(document)
+
+
+def delete_access_token(sub: str, item_id: str) -> bool:
+    """Forget one of this user's Items' access token (after ``/item/remove``). False if there
+    was none for this user — an Item ID alone can never delete another user's token."""
+    document = _read_json("PLAID_TOKENS_SECRET_ID", "Plaid access tokens")
+    items = _items(document)
+    entry = items.get(item_id)
+    if not isinstance(entry, dict) or entry.get("sub") != sub:
+        return False
+    del items[item_id]
+    document["items"] = items
+    _write_tokens(document)
+    return True
+
+
+def _write_tokens(document: dict) -> None:
     try:
         _client.put_secret_value(
             SecretId=os.environ["PLAID_TOKENS_SECRET_ID"],

@@ -45,13 +45,14 @@ from adapters.dynamo import (
     merge_pending_transaction,
     save_plaid_sync_state,
     set_import_status,
+    set_plaid_item_error,
     update_plaid_transaction,
 )
 from adapters.plaid import PlaidClient, PlaidError, is_mutation_during_pagination
 from adapters.secrets import SecretConfigError, get_access_token, get_plaid_credentials
 from adapters.sqs import enqueue_categorization
 from core.imports import STATUS_COMPLETE, STATUS_FAILED, STATUS_PARSING
-from core.plaid_items import account_labels, account_view
+from core.plaid_items import account_labels, account_types, account_view
 from core.plaid_normalize import normalize
 from core.plaid_sync import OP_MERGE, OP_REMOVE, collect_updates, plan
 from core.transactions import STATUS_UNCATEGORIZED, to_item
@@ -92,6 +93,15 @@ def handler(event: dict, context) -> dict:
             "outcome": "failed", "reason": message, **plaid_fields,
         }))
         set_import_status(sub, import_id, STATUS_FAILED, errors=[{"error": message}])
+        if isinstance(err, PlaidError) and not err.retryable:
+            # Shown on the connections panel; ITEM_LOGIN_REQUIRED there offers "Reconnect".
+            # Transient errors are not recorded: they clear on their own.
+            try:
+                set_plaid_item_error(sub, item_id, error_code=err.error_code,
+                                     at=datetime.now(UTC).isoformat())
+            except Exception:
+                logger.exception(json.dumps({"stage": "plaid_sync", "itemId": item_id,
+                                             "err": "could not record the item error"}))
         return {"status": STATUS_FAILED, "importId": import_id}
     return {"status": STATUS_COMPLETE, "importId": import_id, **counts}
 
@@ -127,6 +137,10 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
     fetched = client.accounts_get(access_token=access_token).get("accounts") or []
     accounts = [account_view(a) for a in fetched] or item.get("accounts", [])
     labels = account_labels(accounts)
+    # Stored types first, fresh ones over them, for rows *added* while an account is briefly
+    # unlisted. Rows already stored keep their type regardless (STICKY_SOURCE_FIELDS), since
+    # the stored account list itself is replaced by /accounts/get on every sync.
+    types = {**account_types(item.get("accounts", [])), **account_types(accounts)}
 
     added = modified = merged = removed = skipped = pending_added = 0
     errors: list[dict] = []
@@ -143,7 +157,7 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
 
         try:
             normalized = normalize(op.txn, account_labels=labels, item_id=item_id,
-                                   plaid_env=client.plaid_env)
+                                   plaid_env=client.plaid_env, account_types=types)
         except ValueError as err:
             errors.append({"error": str(err)})
             continue

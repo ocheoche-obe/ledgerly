@@ -21,6 +21,8 @@ negative spend — the UI renders those as income rather than as a budget bar.
 """
 from __future__ import annotations
 
+from core.plaid_items import excluded_from_spend
+
 # A budget amount is a non-negative whole number of cents. The ceiling is a sanity guard
 # against a fat-fingered entry (a $10M monthly grocery budget is a typo, not a plan).
 MAX_AMOUNT_CENTS = 1_000_000_000  # $10,000,000.00
@@ -93,6 +95,10 @@ def summarize(
     money go", and the totals would not reconcile against the bank.
 
     Rows are ordered by the categories' ``sortOrder``, with Uncategorized last.
+
+    Transactions on loan accounts (``core.plaid_items.excluded_from_spend``) are left out of every figure, rows
+    and totals alike; ``totals.excludedCount`` says how many were, so the screen can say so
+    rather than let the numbers quietly disagree with the transaction list.
     """
     budget_by_cat = {b["categoryId"]: int(b["amountCents"]) for b in budgets}
 
@@ -104,7 +110,13 @@ def summarize(
     pending_net_by_cat: dict[str | None, int] = {}
     pending_count = 0
     money_in = money_out = 0
+    excluded_count = 0
+    counted = 0
     for txn in transactions:
+        if excluded_from_spend(txn):
+            excluded_count += 1
+            continue
+        counted += 1
         amount = int(txn["amountCents"])
         cat_id = txn.get("categoryId")  # None → the Uncategorized row
         net_by_cat[cat_id] = net_by_cat.get(cat_id, 0) + amount
@@ -160,11 +172,13 @@ def summarize(
             "budgetedCents": budgeted,
             "spentAgainstBudgetCents": spent_against_budget,
             "remainingCents": budgeted - spent_against_budget,
-            "transactionCount": len(transactions),
+            "transactionCount": counted,
             "uncategorizedCount": count_by_cat.get(None, 0),
             # Already included in the figures above — the part of them that is not final yet.
             "pendingSpentCents": -sum(pending_net_by_cat.values()),
             "pendingCount": pending_count,
+            # Loan-account rows in this window that none of the figures above include.
+            "excludedCount": excluded_count,
         },
     }
 

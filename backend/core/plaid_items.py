@@ -109,9 +109,26 @@ def new_plaid_item(
     }
 
 
+# Plaid error codes on an Item that the owner fixes by logging in again through Link in
+# update mode. Other errors (an institution outage, a rate limit) clear on their own, and
+# re-linking would not help them, so they are shown but not offered a "Reconnect" button.
+#
+# Only codes a /transactions/sync call can actually raise belong here. PENDING_EXPIRATION and
+# PENDING_DISCONNECT (consent about to lapse) arrive as *webhooks*, which this build does not
+# receive yet; they join this set when the webhook follow-up lands (ADR-014).
+RECONNECT_ERROR_CODES = frozenset({
+    "ITEM_LOGIN_REQUIRED",  # the bank login broke or expired (Sandbox Items do this at ~30 days)
+})
+
+
 def plaid_item_view(item: dict) -> dict:
     """Owner-facing projection. Deliberately omits the cursor (internal) — and there is no
-    token on the record to omit."""
+    token on the record to omit.
+
+    ``errorCode`` is the Plaid error from the most recent failed sync, cleared by the next
+    successful one; ``needsReconnect`` says whether Link's update mode is the fix.
+    """
+    error_code = item.get("errorCode") or ""
     accounts = []
     for a in item.get("accounts", []):
         view = dict(a)
@@ -127,4 +144,31 @@ def plaid_item_view(item: dict) -> dict:
         "plaidEnv": item.get("plaidEnv", ""),
         "createdAt": item.get("createdAt", ""),
         "lastSyncedAt": item.get("lastSyncedAt", ""),
+        "errorCode": error_code,
+        "errorAt": item.get("errorAt", "") if error_code else "",
+        "needsReconnect": error_code in RECONNECT_ERROR_CODES,
     }
+
+
+
+def account_types(accounts: list[dict]) -> dict[str, str]:
+    """Stored account views → ``{plaidAccountId: type}`` for the normalizer."""
+    return {a["plaidAccountId"]: a["type"]
+            for a in accounts if a.get("plaidAccountId") and a.get("type")}
+
+
+# Plaid account types whose transactions stay out of the dashboard's spend figures
+# (owner decision 2026-11-15, ADR-015). A loan account reports each payment as a *credit* - the
+# balance owed went down - so counted as-is it reads as income and nets spend down, and the
+# same payment leaving checking would be counted a second time once that side is synced.
+# Debt spending is counted once, where the cash leaves. Loan balances stay visible on the
+# Bank connections panel. Moving card payments to a Transfer category is Slice 7's job.
+#
+# The type is read from the row itself (``accountType``, stamped at sync time), not from the
+# connection record: disconnecting keeps the transactions but deletes that record, and the
+# loan rows must not start counting again when it goes.
+DASHBOARD_EXCLUDED_ACCOUNT_TYPES = frozenset({"loan"})
+
+
+def excluded_from_spend(txn: dict) -> bool:
+    return txn.get("accountType") in DASHBOARD_EXCLUDED_ACCOUNT_TYPES

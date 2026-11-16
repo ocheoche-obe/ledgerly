@@ -103,6 +103,7 @@ def _summary(sub: str, cycle_ref: str) -> dict:
     logger.info(json.dumps({
         "route": "GET /cycles/{ref}/summary", "sub": sub, "cycleId": cycle.cycle_id,
         "txns": len(txns), "budgets": len(budgets),
+        "excluded": result["totals"]["excludedCount"],
     }))
     return _response(200, result)
 

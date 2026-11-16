@@ -88,4 +88,6 @@ def txn_view(item: dict) -> dict:
         # disappear. Always false for CSV rows, which are posted by definition (ADR-014).
         "pending": bool(item.get("pending", False)),
         "source": item.get("source", "csv"),
+        # Plaid account type (empty for CSV rows); "loan" rows stay out of the dashboard.
+        "accountType": item.get("accountType", ""),
     }

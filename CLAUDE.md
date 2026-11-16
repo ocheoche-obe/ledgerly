@@ -184,6 +184,8 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   **S3-triggered `importer`** (parse → file/row idempotent puts → import summary → enqueue added
   rows; no-op on redelivered terminal imports), and the **SQS-triggered `categorizer`**
   (rule-first → batched Bedrock → correction-preserving updates; partial-batch-failure → DLQ).
+  `backend/ops/` (not a Lambda, excluded from the asset): owner-run maintenance — the Plaid
+  Sandbox purge (ADR-015).
   `backend/eval/` (not a Lambda): the label/score accuracy harness A/Bing Sonnet 4.6 vs Haiku 4.5.
 - **`infra/` (CDK, Python)** — `LedgerlyStack` (per-stage `Ledgerly-dev`/`Ledgerly-prod`) =
   constructs: `Data` (DynamoDB single table + GSI1/GSI2, PITR), `Auth` (Cognito pool +
@@ -208,6 +210,8 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   for a cycle + totals band + cycle picker + inline budget editing, styled via
   `dashboardStyles.ts` — a **real stylesheet**, not inline styles, because the layout needs media
   queries (FR-5.4) and `:hover`/`:focus`; the other panels keep inline styles until [B-3];
+  **`BankConnectionsPanel`** (Slice 9, `dev` only — hides itself on a 404) = Plaid Link connect,
+  Sync now, Reconnect (update mode, one keyed `usePlaidLink` per token), Disconnect;
   `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
   recent imports; `TransactionsPanel` = date-window transaction table with a **Category** column that reflects
   the async pipeline (reads Uncategorized until the categorizer runs, then the category name +
@@ -255,18 +259,24 @@ _Solidified at the end of Slice 1. Binding:_
   feature works. Slice 5 sat "deployed" for 12 days while every categorizer invocation failed on
   an ungranted Bedrock model agreement, because nobody ran the ☐ items. Option A ("deploy via the
   pipeline on merge") is a *shipping* strategy, not a *verification* strategy.
-- **Who merges (owner decision, 2026-08-02):** `Bash(gh pr merge:*)` is allowlisted in
-  `.claude/settings.local.json`, so Claude *can* merge — but the permission is a capability, not
-  a licence. The split is by **kind of PR**, and it is a judgement call Claude makes, since no
-  permission rule can distinguish them:
-  - **Slice PRs — owner merges.** Anything from `/wrap-slice`, i.e. feature work with an exit-
-    criteria checklist. Claude opens the PR, gets CI green, and stops. Reviewing the slice *is*
-    the owner's checkpoint on the build; auto-merging would erase it.
-  - **Cleanup PRs — Claude may merge once CI is green.** Dependency waves, CI/lint repairs,
-    infra hygiene, docs/backlog entries. No new product behaviour, and the diff is mechanical
-    or self-evident from the PR body.
-  - When it isn't obvious which bucket a PR is in, ask. Anything that changes deploy behaviour,
-    IAM, or data handling is a slice PR regardless of how small the diff looks.
+- **Who merges (owner decision, 2026-11-16; supersedes the 2026-08-02 split):** Claude merges
+  **any** PR — slice or cleanup — once **both** hold: (1) a blind **`/review-pr`** on the PR's
+  *final* state (after the doc updates) reports **no blockers**, and (2) **CI is green** on that
+  same commit. Blockers get fixed, CI re-runs, and `/review-pr` re-runs on the new state before
+  merging. Afterwards, tell the owner what the reviews found and what was merged.
+  - **Still waits for the owner, regardless of review/CI:** anything that **deletes data**,
+    anything that **touches prod** (including approving the `prod` environment gate in
+    `deploy.yml` — merging deploys `dev` only; prod promotion stays the owner's approval), and
+    anything that needs an **owner decision** (product behaviour, cost, scope, an ADR choice).
+    When it isn't obvious which side a PR falls on, ask.
+  - `Bash(gh pr merge:*)` is allowlisted in `.claude/settings.local.json` for this.
+- **Blind review after every PR (owner rule, 2026-11-15; binding):** after opening *any* PR —
+  slice or cleanup — run **`/review-pr`** (and again on the final state before merging). It reviews the PR in a fresh, read-only subagent
+  (`.claude/agents/pr-reviewer.md`) that has not seen the building conversation, and reports
+  blocker / should-fix / nit findings with file:line plus a one-line verdict. **Fix every
+  blocker** (push, let CI re-run, and re-run `/review-pr` if the fix was non-trivial), then
+  **tell the owner what it found** — blockers and how each was fixed, should-fixes and what was
+  done or deferred — when reporting the merge (see "Who merges"). It complements `/code-review` and `/security-review`; it doesn't replace them.
 
 ## Cost constraints
 
@@ -279,22 +289,27 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
-**Slice 9 — Plaid Sandbox ingest: 🔨 BACKEND BUILT (2026-11-15), PR open, NOT deployed, NOT run
-against Plaid.** ADR-014 Accepted (pending counts toward "spent"). Built: `core/plaid_normalize.py`
-(sign flip, null merchant, pending), `core/plaid_sync.py` (buffer-all-pages loop that restarts
-from the starting cursor on `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION`; plan that merges
-posted-before-removed), `core/plaid_items.py`, `adapters/plaid.py` (stdlib `urllib`, Sandbox host
-only, keys in headers), `adapters/secrets.py`, `adapters/lambda_invoke.py`, Plaid writes in
-`adapters/dynamo.py` (row + `PLAIDTXN#` pointer always in one transaction), `functions/api_plaid`,
-`functions/plaid_sync`, `PlaidConstruct`. `summarize` reports `pendingSpentCents`. Review fixes (2026-11-15): `apply_categorization`
-requires the row to still exist; the connection record is written right after the token and the
-exchange is never retried; cancelled DynamoDB transactions are only "already exists" on a real
-condition failure; a `plaid-sync-failed` on-failure Lambda; CI asserts prod has no Plaid
-resources (`infra/check_prod_has_no_plaid.py`). 314 backend tests. **Outstanding:** owner creates the API-keys secret · deploy · run one Sandbox sync with
-`user_transactions_dynamic` (the `sandbox_link` / `sandbox_refresh` direct-invoke actions on
-`ledgerly-dev-api-plaid` exist for this) · SPA "Bank connection" panel · `/item/remove` ·
-architecture §1.2/§1.3/§2.4/§2.5 prose. `PLAID_PLAN.md` is the Plaid build-kit state file.
-_The Slice 6 notes below predate this and have not been re-verified here._
+**Slice 9 — Plaid Sandbox ingest: ✅ COMPLETE (2026-11-16)** — #61 (backend) + #62 (Bank
+connections UI). Verified live on `dev` through the real UI (Playwright) as the **dev-only Cognito
+Sandbox user** (`…+sandbox@gmail.com`, `PlaidSandboxUser`); Plaid build-kit acceptance PASS
+(`PLAID_PLAN.md`). **Next:** Slice 7 (review queue + the **Transfer category** — the gap the
+`user_good` persona exposed) — check the plan's status board.
+
+Worth knowing before touching Plaid code:
+- **ADR-015:** Plaid rows carry `accountType`; `loan` rows are left out of every dashboard figure
+  (`core/plaid_items.excluded_from_spend`). `accountType` is a *sticky* source field — updates
+  set it, never remove it. **Sandbox data belongs to the Sandbox user, never the owner's
+  partition** (convention, not enforced — [B-11]); `backend/ops/purge_plaid_sandbox.py` cleans
+  the owner's partition if it happens (dry run first; execution needs the printed fingerprint).
+- Routes (owner-confirmed): `POST /plaid/link-token` (`{itemId}` → update mode), `/plaid/exchange`,
+  `/plaid/sync`, `GET /plaid/items`, `DELETE /plaid/items/{itemId}` — `dev` only.
+- **Deploying `dev` from a branch:** an exact-match allow rule lets Claude run `npx --yes
+  aws-cdk@2.1148.1 deploy Ledgerly-dev --profile ledgerly-dev --require-approval never`; show the
+  `cdk diff` in chat first. [B-10] replaces this with a dispatchable GitHub Action.
+- **Playwright** runs headed on the owner's machine (`.mcp.json`, local change); the owner signs
+  in, Claude never types passwords. Cognito logout needs `client_id` + `logout_uri` (`auth.ts`).
+
+_The Slice 6 notes below predate Slice 9 and have not been re-verified here._
 
 **Slice 6 — budgets & at-a-glance dashboard: 🔨 CODE-COMPLETE (2026-08-07), PR open, NOT yet
 verified live. Slice 5 ✅ complete (2026-08-03).**
