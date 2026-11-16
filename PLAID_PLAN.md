@@ -71,11 +71,20 @@ ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run a
       Sync now, update-mode Reconnect on `ITEM_LOGIN_REQUIRED`, Disconnect (PR #62)
 - [x] Loan accounts left out of the dashboard figures (owner decision below)
 - [x] Dev-only Cognito Sandbox test user `PlaidSandboxUser` (owner decision below)
-- [ ] Deployed to dev and run live (blocked on the owner's `cdk deploy`)
+- [x] Deployed to dev and run live (2026-11-16; acceptance round 1 PASS)
 
 ## Acceptance
 
-- Round 0: not run.
+- Round 1 (2026-11-16, commit after `fix(slice9): every failed-sync state names a next step`):
+  **PASS** (CHECK-006/007 not_applicable). Evidence from a live run on the deployed dev stack
+  through the real UI as the Cognito Sandbox test user: link → exchange → sync (331 rows,
+  `user_transactions_dynamic`), Sync now 0 new, reset_login → Reconnect in update mode (no
+  exchange) → 0 new, Disconnect; second persona `user_good` (48 rows). Recorded deviations:
+  Plaid `personal_finance_category` unused (owner's LLM categorizer, ADR-008; input for the
+  Slice 7 Transfer category); no "still importing history" state; Link exit metadata not
+  persisted. Named goal-fit gap: transfers between the owner's own accounts (card payments,
+  CD/savings deposits) still count as spend — the Transfer category, deferred to Slice 7.
+  Fixed during the round: Cognito logout (pre-existing), failed-sync copy for ITEM_LOCKED.
 
 ## Maintenance
 
