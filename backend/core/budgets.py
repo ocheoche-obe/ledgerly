@@ -21,6 +21,8 @@ negative spend — the UI renders those as income rather than as a budget bar.
 """
 from __future__ import annotations
 
+from core.plaid_items import excluded_from_spend
+
 # A budget amount is a non-negative whole number of cents. The ceiling is a sanity guard
 # against a fat-fingered entry (a $10M monthly grocery budget is a typo, not a plan).
 MAX_AMOUNT_CENTS = 1_000_000_000  # $10,000,000.00
@@ -80,7 +82,6 @@ def summarize(
     categories: list[dict],
     budgets: list[dict],
     transactions: list[dict],
-    excluded_account_ids: frozenset[str] = frozenset(),
 ) -> dict:
     """Budgets + a cycle's transactions → the dashboard payload (FR-5.1, architecture §3.3).
 
@@ -95,8 +96,7 @@ def summarize(
 
     Rows are ordered by the categories' ``sortOrder``, with Uncategorized last.
 
-    Transactions on ``excluded_account_ids`` (loan accounts — see
-    ``core.plaid_items.DASHBOARD_EXCLUDED_ACCOUNT_TYPES``) are left out of every figure, rows
+    Transactions on loan accounts (``core.plaid_items.excluded_from_spend``) are left out of every figure, rows
     and totals alike; ``totals.excludedCount`` says how many were, so the screen can say so
     rather than let the numbers quietly disagree with the transaction list.
     """
@@ -113,7 +113,7 @@ def summarize(
     excluded_count = 0
     counted = 0
     for txn in transactions:
-        if txn.get("accountId") in excluded_account_ids:
+        if excluded_from_spend(txn):
             excluded_count += 1
             continue
         counted += 1

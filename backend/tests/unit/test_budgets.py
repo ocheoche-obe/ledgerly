@@ -198,15 +198,14 @@ def test_empty_cycle_produces_zero_totals_not_an_error():
 
 # --- loan accounts stay out of the figures (owner decision 2026-11-15) -------------------
 
-def test_excluded_account_rows_count_toward_nothing():
-    loan_payment = {**_txn(51400, INCOME), "accountId": "auto-loan-5000"}
-    loan_interest = {**_txn(-3100, None), "accountId": "auto-loan-5000"}
-    groceries = {**_txn(-2500, GROC), "accountId": "plaid-checking-0000"}
+def test_loan_account_rows_count_toward_nothing():
+    loan_payment = {**_txn(51400, INCOME), "accountType": "loan"}
+    loan_interest = {**_txn(-3100, None), "accountType": "loan"}
+    groceries = {**_txn(-2500, GROC), "accountType": "depository"}
 
     result = summarize(
         cycle=CYCLE, categories=CATEGORIES, budgets=[],
         transactions=[loan_payment, loan_interest, groceries],
-        excluded_account_ids=frozenset({"auto-loan-5000"}),
     )
 
     rows = _rows(result)
@@ -219,10 +218,12 @@ def test_excluded_account_rows_count_toward_nothing():
     assert totals["excludedCount"] == 2
 
 
-def test_nothing_is_excluded_by_default():
+def test_exclusion_follows_the_account_type_not_the_label():
+    # A CSV account the owner happened to label like a Plaid loan account still counts.
     result = summarize(
         cycle=CYCLE, categories=CATEGORIES, budgets=[],
-        transactions=[{**_txn(-2500, GROC), "accountId": "auto-loan-5000"}],
+        transactions=[{**_txn(-2500, GROC), "accountId": "auto-loan-5000"},
+                      {**_txn(-1000, GROC), "accountType": "credit"}],  # card purchases count
     )
-    assert result["totals"]["transactionCount"] == 1
+    assert result["totals"]["transactionCount"] == 2
     assert result["totals"]["excludedCount"] == 0

@@ -19,6 +19,7 @@ through the app first, which also revokes it at Plaid and deletes its access tok
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 SANDBOX = "sandbox"
@@ -41,7 +42,16 @@ class PurgePlan:
 
     @property
     def keys(self) -> list[str]:
-        return [*self.transactions, *self.pointers, *self.imports]
+        """Deletion order. A row is what *proves* its pointer and its sync are Sandbox, so the
+        rows go last: if a run dies partway, a re-run still finds everything left. (Rows first
+        would strand their pointers as unprovable and leave them behind for good.)"""
+        return [*self.pointers, *self.imports, *self.transactions]
+
+    @property
+    def digest(self) -> str:
+        """Short fingerprint of exactly which keys are selected. The dry run prints it and an
+        execute must quote it back, so a delete only ever runs on the selection reviewed."""
+        return hashlib.sha256("\n".join(sorted(self.keys)).encode()).hexdigest()[:12]
 
     def summary(self) -> dict:
         return {
@@ -49,6 +59,7 @@ class PurgePlan:
             "pointers": len(self.pointers),
             "imports": len(self.imports),
             "total": len(self.keys),
+            "selection": self.digest,
             "leftAlone": len(self.left_alone),
             "plaidItemIds": sorted(self.item_ids),
             "dateRange": list(self.date_range) if self.date_range else None,

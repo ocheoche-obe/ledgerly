@@ -150,20 +150,25 @@ def plaid_item_view(item: dict) -> dict:
     }
 
 
+
+def account_types(accounts: list[dict]) -> dict[str, str]:
+    """Stored account views → ``{plaidAccountId: type}`` for the normalizer."""
+    return {a["plaidAccountId"]: a["type"]
+            for a in accounts if a.get("plaidAccountId") and a.get("type")}
+
+
 # Plaid account types whose transactions stay out of the dashboard's spend figures
-# (owner decision, 2026-11-15). A loan account reports each payment as a *credit* — the
-# balance owed went down — so counted as-is it reads as income and nets spend down, and the
+# (owner decision, 2026-11-15). A loan account reports each payment as a *credit* - the
+# balance owed went down - so counted as-is it reads as income and nets spend down, and the
 # same payment leaving checking would be counted a second time once that side is synced.
 # Debt spending is counted once, where the cash leaves. Loan balances stay visible on the
 # Bank connections panel. Moving card payments to a Transfer category is Slice 7's job.
+#
+# The type is read from the row itself (``accountType``, stamped at sync time), not from the
+# connection record: disconnecting keeps the transactions but deletes that record, and the
+# loan rows must not start counting again when it goes.
 DASHBOARD_EXCLUDED_ACCOUNT_TYPES = frozenset({"loan"})
 
 
-def dashboard_excluded_account_ids(items: list[dict]) -> frozenset[str]:
-    """Stored Item records → the ``accountId``s whose rows the dashboard leaves out."""
-    return frozenset(
-        a["accountId"]
-        for item in items
-        for a in item.get("accounts", [])
-        if a.get("type") in DASHBOARD_EXCLUDED_ACCOUNT_TYPES and a.get("accountId")
-    )
+def excluded_from_spend(txn: dict) -> bool:
+    return txn.get("accountType") in DASHBOARD_EXCLUDED_ACCOUNT_TYPES

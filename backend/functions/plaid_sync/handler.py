@@ -52,7 +52,7 @@ from adapters.plaid import PlaidClient, PlaidError, is_mutation_during_paginatio
 from adapters.secrets import SecretConfigError, get_access_token, get_plaid_credentials
 from adapters.sqs import enqueue_categorization
 from core.imports import STATUS_COMPLETE, STATUS_FAILED, STATUS_PARSING
-from core.plaid_items import account_labels, account_view
+from core.plaid_items import account_labels, account_types, account_view
 from core.plaid_normalize import normalize
 from core.plaid_sync import OP_MERGE, OP_REMOVE, collect_updates, plan
 from core.transactions import STATUS_UNCATEGORIZED, to_item
@@ -137,6 +137,7 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
     fetched = client.accounts_get(access_token=access_token).get("accounts") or []
     accounts = [account_view(a) for a in fetched] or item.get("accounts", [])
     labels = account_labels(accounts)
+    types = account_types(accounts)
 
     added = modified = merged = removed = skipped = pending_added = 0
     errors: list[dict] = []
@@ -153,7 +154,7 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
 
         try:
             normalized = normalize(op.txn, account_labels=labels, item_id=item_id,
-                                   plaid_env=client.plaid_env)
+                                   plaid_env=client.plaid_env, account_types=types)
         except ValueError as err:
             errors.append({"error": str(err)})
             continue

@@ -29,13 +29,11 @@ from adapters.dynamo import (
     get_or_create_settings,
     list_budgets,
     list_categories,
-    list_plaid_items,
     put_budget,
     query_transactions,
 )
 from core.budgets import summarize
 from core.cycles import cycle_for, recent_cycles, today_utc
-from core.plaid_items import dashboard_excluded_account_ids
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -97,9 +95,6 @@ def _summary(sub: str, cycle_ref: str) -> dict:
         categories=list_categories(sub),
         budgets=budgets,
         transactions=txns,
-        # Loan accounts stay out of spend (owner decision 2026-11-15); the account types live
-        # on the Plaid Item records, not on each transaction row.
-        excluded_account_ids=dashboard_excluded_account_ids(list_plaid_items(sub)),
     )
     if len(txns) >= TXN_QUERY_LIMIT:
         # Single-page read ([B-2]); at the cap the totals would under-report the cycle, and a

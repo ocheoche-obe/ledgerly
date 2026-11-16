@@ -43,6 +43,28 @@ def test_selects_sandbox_rows_their_pointers_and_their_syncs_only():
     assert plan.summary()["dateRange"] == ["2026-08-21", "2026-11-15"]
 
 
+def test_rows_are_deleted_last_so_a_partial_run_can_be_rerun():
+    plan = plan_sandbox_purge(PARTITION)
+    assert plan.keys[:2] == ["PLAIDTXN#tx-a", "PLAIDTXN#tx-b"]
+    assert plan.keys[-2:] == ["TXN#2026-08-21#tx-a", "TXN#2026-11-15#tx-b"]
+    # Simulate a run that died after the pointers and the sync: the rows still prove the
+    # rest, so the re-run selects exactly them and nothing becomes unprovable.
+    survivors = [i for i in PARTITION if i["sk"] not in set(plan.keys[:3])]
+    rerun = plan_sandbox_purge(survivors)
+    assert rerun.keys == plan.keys[3:]
+    assert rerun.left_alone == []
+
+
+def test_the_fingerprint_changes_with_the_selection_not_just_its_size():
+    base = plan_sandbox_purge(PARTITION).digest
+    assert plan_sandbox_purge(list(reversed(PARTITION))).digest == base  # order-independent
+    swapped = [i for i in PARTITION if i["sk"] not in {"TXN#2026-11-15#tx-b", "PLAIDTXN#tx-b"}]
+    swapped += [_plaid_txn("tx-c", "2026-11-15"), {"sk": "PLAIDTXN#tx-c"}]
+    other = plan_sandbox_purge(swapped)
+    assert len(other.keys) == 5
+    assert other.digest != base
+
+
 def test_never_selects_csv_rows_settings_categories_or_budgets():
     selected = set(plan_sandbox_purge(PARTITION).keys)
     for item in PARTITION:

@@ -10,13 +10,17 @@ Safeguards, in order:
   1. The caller must be in the Ledgerly account (ADR-010), via the ``ledgerly-dev`` profile.
   2. The table must be the dev table (``--table`` is checked against the stage name).
   3. Any still-linked Plaid connection blocks the run: disconnect it in the app first.
-  4. Without ``--execute`` nothing is written. With it, ``--expect`` must equal the total
-     the dry run printed, so a delete never runs on a selection nobody looked at.
-  5. Before deleting, every selected item is written to a local JSON manifest. The table
-     also has point-in-time recovery (35 days), which is the real undo.
+  4. Without ``--execute`` nothing is written. With it, ``--selection`` must equal the
+     fingerprint the dry run printed (a hash of the exact keys, not just their count), so a
+     delete never runs on a selection nobody looked at.
+  5. Before deleting, every selected item is written to a JSON manifest in the temp directory
+     (outside the repo; it holds raw Plaid payloads). The table also has point-in-time
+     recovery (35 days), which is the real undo.
+  6. Deletes run pointers → syncs → rows, so a run that dies partway is safely re-runnable.
 
     AWS_PROFILE=ledgerly-dev python -m ops.purge_plaid_sandbox --sub <cognito-sub>
-    AWS_PROFILE=ledgerly-dev python -m ops.purge_plaid_sandbox --sub <sub> --execute --expect N
+    AWS_PROFILE=ledgerly-dev python -m ops.purge_plaid_sandbox --sub <sub> --execute \
+        --selection <fingerprint from the dry run>
 
 Run from ``backend/``.
 """
@@ -25,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,7 +44,8 @@ DEFAULT_TABLE = "ledgerly-dev"
 
 def _read_partition(table, sub: str) -> list[dict]:
     items: list[dict] = []
-    kwargs = {"KeyConditionExpression": Key("pk").eq(f"USER#{sub}")}
+    # Strongly consistent: the post-delete check must not see items already deleted.
+    kwargs = {"KeyConditionExpression": Key("pk").eq(f"USER#{sub}"), "ConsistentRead": True}
     while True:
         page = table.query(**kwargs)
         items.extend(page.get("Items", []))
@@ -53,8 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sub", required=True, help="Cognito sub whose partition to purge")
     parser.add_argument("--table", default=DEFAULT_TABLE)
     parser.add_argument("--execute", action="store_true", help="actually delete")
-    parser.add_argument("--expect", type=int, help="total from the dry run (required to execute)")
-    parser.add_argument("--manifest-dir", default=".", help="where the pre-delete manifest goes")
+    parser.add_argument("--selection", help="fingerprint from the dry run (required to execute)")
+    parser.add_argument("--manifest-dir", default=tempfile.gettempdir(),
+                        help="where the pre-delete manifest goes (default: the temp directory)")
     args = parser.parse_args(argv)
 
     account = boto3.client("sts").get_caller_identity()["Account"]
@@ -84,11 +91,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.execute:
         print(f"\nDry run: nothing deleted. To delete these {summary['total']} items, re-run "
-              f"with --execute --expect {summary['total']}")
+              f"with --execute --selection {plan.digest}")
         return 0
-    if args.expect != summary["total"]:
-        print(f"REFUSED: --expect {args.expect} but the selection is now {summary['total']}. "
-              "Re-run the dry run and review it.")
+    if args.selection != plan.digest:
+        print(f"REFUSED: --selection {args.selection} but the selection is now {plan.digest} "
+              f"({summary['total']} items). Re-run the dry run and review it.")
         return 2
     if not plan.keys:
         print("Nothing to delete.")
@@ -105,10 +112,17 @@ def main(argv: list[str] | None = None) -> int:
         for sk in plan.keys:
             batch.delete_item(Key={"pk": f"USER#{args.sub}", "sk": sk})
 
-    remaining = plan_sandbox_purge(_read_partition(table, args.sub))
-    print(f"Deleted {len(selected)} items. Sandbox items still selected afterwards: "
-          f"{remaining.summary()['total']}")
-    return 0 if not remaining.keys else 1
+    try:
+        remaining = plan_sandbox_purge(_read_partition(table, args.sub))
+    except PurgeBlockedError as err:  # a connection was linked mid-run
+        print(f"Deleted {len(selected)} items, but the check afterwards is blocked: {err}")
+        return 1
+    new_left_alone = sorted(set(remaining.left_alone) - set(plan.left_alone))
+    print(f"Deleted {len(selected)} items. Still selected afterwards: "
+          f"{remaining.summary()['total']}; newly unprovable: {len(new_left_alone)}")
+    for sk in new_left_alone:
+        print(f"  {sk}")
+    return 0 if not remaining.keys and not new_left_alone else 1
 
 
 if __name__ == "__main__":

@@ -94,8 +94,9 @@ adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
 - 2026-11-15 (owner): ADR-014 accepted as written. Pending transactions count toward "spent".
   Route paths `/plaid/link-token`, `/plaid/exchange`, `/plaid/sync` stand (GUIDE-020).
 - 2026-11-15 (owner): **Loan payments are transfers, not spend.** Accounts of Plaid type `loan`
-  are left out of every dashboard figure (`summarize(excluded_account_ids=...)`); the dashboard
-  says how many rows it left out, and loan balances stay on Bank connections. A "Transfer"
+  are left out of every dashboard figure. The type is stamped on each row at sync time
+  (`accountType`), so loan rows stay out after a disconnect too; the dashboard says how many
+  rows it left out, and loan balances stay on Bank connections. A "Transfer"
   category for card payments etc. waits for Slice 7.
 - 2026-11-15 (owner): **Sandbox data lives under its own Cognito user** (`PlaidSandboxUser`,
   dev only, a `+sandbox` plus-address of the owner's email), isolated by the `USER#<sub>`
@@ -107,7 +108,8 @@ adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
 
 ## Runbook: move Sandbox off the owner's partition (owner-approved, not yet run)
 
-Dry run 2026-11-15 (read-only) on the owner's partition: **701 items** selected — 349 Sandbox
+Dry run 2026-11-15 (read-only) on the owner's partition: **701 items**, fingerprint
+`d703a6664435`, selected — 349 Sandbox
 transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 → 2026-11-15;
 0 Plaid-looking items left alone. Kept: 153 Chase CSV rows (Jun–Jul), 8 Slice-5 smoke rows
 (Aug), 15 categories, 4 CSV imports, the profile. PITR is enabled (35 days) and is the undo.
@@ -117,9 +119,11 @@ transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 �
 2. Logged in as the owner, **Disconnect** First Platypus Bank in the new panel (live test of
    `/item/remove`). The purge refuses to run while any connection is still linked.
 3. Dry run: `cd backend && AWS_PROFILE=ledgerly-dev .venv/bin/python -m ops.purge_plaid_sandbox
-   --sub <owner sub>`. Expect 701; anything else is a reason to stop and look.
-4. Execute: same command plus `--execute --expect 701`. It writes a JSON manifest of every item
-   first, deletes, then re-plans to confirm 0 remain.
+   --sub <owner sub>`. Expect 701 items and fingerprint `d703a6664435`; anything else is a
+   reason to stop and look.
+4. Execute: same command plus `--execute --selection <fingerprint>`. It writes a JSON manifest
+   of every item to the temp directory first, deletes pointers → syncs → rows (re-runnable if
+   it dies partway), then re-plans to confirm 0 remain.
 5. Owner logs in once as the Sandbox user (sets its password; Claude never sees it). Live test
    there: connect First Platypus as `user_transactions_dynamic` and a second institution as
    `user_good` (it has the loan accounts), Sync now, Reconnect via the `sandbox_reset_login`

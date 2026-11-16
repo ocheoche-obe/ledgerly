@@ -330,6 +330,7 @@ def test_first_sync_adds_rows_flags_pending_and_enqueues_them(env):
     assert rows["t1"]["categoryStatus"] == "uncategorized"
     assert rows["t1"]["accountId"] == "plaid-checking-0000"
     assert rows["t1"]["plaidEnv"] == "sandbox"
+    assert rows["t1"]["accountType"] == "depository"  # stamped from /accounts/get
     assert env.pointers() == {"t1", "t2", "p1"}
     assert env.cursor() == "c2"
     assert sorted(env.drain_queue()) == ["p1", "t1", "t2"]
