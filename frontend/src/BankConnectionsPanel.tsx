@@ -36,6 +36,13 @@ const CATEGORIZE_RELOAD_MS = [20_000, 45_000];
 
 type LinkMode = { mode: "link" } | { mode: "update"; itemId: string };
 
+// One Link token = one Link session. The mode travels with the token so a callback can never
+// be interpreted against a different session's mode.
+interface LinkSessionState {
+  token: string;
+  mode: LinkMode;
+}
+
 interface SyncOutcome {
   institution: string;
   view: ImportSummary;
@@ -53,15 +60,11 @@ export function BankConnectionsPanel({
 }) {
   const [connections, setConnections] = useState<BankConnection[] | null>(null);
   const [available, setAvailable] = useState(true);
-  const [token, setToken] = useState<string | null>(null);
-  const [openWhenReady, setOpenWhenReady] = useState(false);
+  const [session, setSession] = useState<LinkSessionState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<SyncOutcome[]>([]);
 
-  // Which kind of Link session the current token opens. A ref, not state: Link's callbacks
-  // must see the mode of the token they were opened with, even across re-renders.
-  const modeRef = useRef<LinkMode>({ mode: "link" });
   const timers = useRef<number[]>([]);
 
   useEffect(
@@ -85,10 +88,10 @@ export function BankConnectionsPanel({
 
   // Pre-initialize Link with a fresh new-connection token, so the button is ready on click.
   const prepareNewLink = useCallback(async () => {
-    modeRef.current = { mode: "link" };
-    setToken(null);
+    setSession(null);
     try {
-      setToken((await api.createLinkToken()).linkToken);
+      const { linkToken } = await api.createLinkToken();
+      setSession({ token: linkToken, mode: { mode: "link" } });
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 404)) onError(message(e));
     }
@@ -137,8 +140,7 @@ export function BankConnectionsPanel({
   );
 
   const onSuccess = useCallback(
-    async (publicToken: string | null, metadata: PlaidLinkOnSuccessMetadata) => {
-      const mode = modeRef.current;
+    async (mode: LinkMode, publicToken: string | null, metadata: PlaidLinkOnSuccessMetadata) => {
       setNotice(null);
       if (mode.mode === "update") {
         // Update mode returns no public token and needs no exchange: the login is repaired
@@ -180,7 +182,7 @@ export function BankConnectionsPanel({
   );
 
   const onExit = useCallback(
-    (error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
+    (mode: LinkMode, error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
       if (error) {
         // display_message is written for end users when present; otherwise use our own copy.
         // The session ID is what Plaid support needs to investigate.
@@ -191,30 +193,20 @@ export function BankConnectionsPanel({
         );
       }
       // A plain close (no error) is the owner changing their mind: nothing to report.
-      if (modeRef.current.mode === "update" || error?.error_code === "INVALID_LINK_TOKEN") {
+      if (mode.mode === "update" || error?.error_code === "INVALID_LINK_TOKEN") {
         prepareNewLink();
       }
     },
     [prepareNewLink],
   );
 
-  const { open, ready } = usePlaidLink({ token, onSuccess, onExit });
-
-  // Reconnect fetches its token on click; open Link as soon as that token has initialized.
-  useEffect(() => {
-    if (openWhenReady && ready) {
-      setOpenWhenReady(false);
-      open();
-    }
-  }, [openWhenReady, ready, open]);
-
   const reconnect = async (itemId: string) => {
     setNotice(null);
     try {
       const update = await api.createLinkToken(itemId);
-      modeRef.current = { mode: "update", itemId };
-      setToken(update.linkToken);
-      setOpenWhenReady(true);
+      // The keyed LinkSession below mounts a fresh Link handler for this token and opens it
+      // once *that* handler is ready.
+      setSession({ token: update.linkToken, mode: { mode: "update", itemId } });
     } catch (e) {
       onError(message(e));
     }
@@ -256,13 +248,24 @@ export function BankConnectionsPanel({
       </p>
 
       <div style={styles.row}>
-        <button
-          style={styles.button}
-          onClick={() => open()}
-          disabled={!ready || modeRef.current.mode !== "link" || busy !== null}
-        >
-          Connect bank
-        </button>
+        {session ? (
+          // Keyed on the token: each Link token gets its own hook instance, so "ready" can only
+          // ever mean "this token's handler is loaded" (react-plaid-link keeps the previous
+          // handler — and reports ready — while a replacement token is pending).
+          <LinkSession
+            key={session.token}
+            token={session.token}
+            autoOpen={session.mode.mode === "update"}
+            showConnect={session.mode.mode === "link"}
+            disabled={busy !== null}
+            onSuccess={(t, m) => onSuccess(session.mode, t, m)}
+            onExit={(e, m) => onExit(session.mode, e, m)}
+          />
+        ) : (
+          <button style={styles.button} disabled>
+            Connect bank
+          </button>
+        )}
         <button
           style={styles.buttonGhost}
           onClick={() => runSyncs()}
@@ -341,6 +344,46 @@ export function BankConnectionsPanel({
         </ul>
       )}
     </section>
+  );
+}
+
+// One Plaid Link session. Mounted per token (see the key above), so its `ready` is this token's.
+function LinkSession({
+  token,
+  autoOpen,
+  showConnect,
+  disabled,
+  onSuccess,
+  onExit,
+}: {
+  token: string;
+  autoOpen: boolean; // update mode: open as soon as ready (the Reconnect click was the gesture)
+  showConnect: boolean;
+  disabled: boolean;
+  onSuccess: (publicToken: string | null, metadata: PlaidLinkOnSuccessMetadata) => void;
+  onExit: (error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => void;
+}) {
+  const { open, ready } = usePlaidLink({ token, onSuccess, onExit });
+  const opened = useRef(false);
+
+  useEffect(() => {
+    if (autoOpen && ready && !opened.current) {
+      opened.current = true;
+      open();
+    }
+  }, [autoOpen, ready, open]);
+
+  if (!showConnect) {
+    return (
+      <button style={styles.button} disabled>
+        Connect bank
+      </button>
+    );
+  }
+  return (
+    <button style={styles.button} onClick={() => open()} disabled={!ready || disabled}>
+      Connect bank
+    </button>
   );
 }
 

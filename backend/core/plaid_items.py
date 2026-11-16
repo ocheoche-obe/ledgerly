@@ -112,10 +112,12 @@ def new_plaid_item(
 # Plaid error codes on an Item that the owner fixes by logging in again through Link in
 # update mode. Other errors (an institution outage, a rate limit) clear on their own, and
 # re-linking would not help them, so they are shown but not offered a "Reconnect" button.
+#
+# Only codes a /transactions/sync call can actually raise belong here. PENDING_EXPIRATION and
+# PENDING_DISCONNECT (consent about to lapse) arrive as *webhooks*, which this build does not
+# receive yet; they join this set when the webhook follow-up lands (ADR-014).
 RECONNECT_ERROR_CODES = frozenset({
     "ITEM_LOGIN_REQUIRED",  # the bank login broke or expired (Sandbox Items do this at ~30 days)
-    "PENDING_EXPIRATION",   # consent about to expire
-    "PENDING_DISCONNECT",   # the institution is about to drop the connection
 })
 
 

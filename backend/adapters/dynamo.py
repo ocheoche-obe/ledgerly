@@ -626,6 +626,8 @@ def save_plaid_sync_state(
             Key={"pk": _pk(sub), "sk": plaid_item_sk(item_id)},
             # A sync that got this far reached Plaid with a working login, so any error
             # recorded by an earlier failed sync (e.g. ITEM_LOGIN_REQUIRED) no longer holds.
+            # Cleared only when this sync wins the cursor race; if a concurrent sync wins
+            # instead, a stale error can linger until the next sync - self-healing, accepted.
             UpdateExpression="SET #c = :cursor, accounts = :accounts, lastSyncedAt = :at "
                              "REMOVE errorCode, errorAt",
             ConditionExpression="#c = :previous",

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaidLinkOptionsWithLinkToken } from "react-plaid-link";
@@ -12,12 +13,24 @@ import { ApiError, type Api, type BankConnection, type ImportSummary } from "./a
 const link = vi.hoisted(() => ({
   options: null as PlaidLinkOptionsWithLinkToken | null,
   open: vi.fn(),
+  openedTokens: [] as (string | null)[], // which token's handler each open() belonged to
 }));
 
+// Like the real hook, each instance's handler loads asynchronously: `ready` starts false and
+// flips once *this instance's* handler has loaded, and `open` belongs to that handler's token.
 vi.mock("react-plaid-link", () => ({
   usePlaidLink: (options: PlaidLinkOptionsWithLinkToken) => {
     link.options = options;
-    return { open: link.open, ready: options.token !== null, error: null, exit: vi.fn(), submit: vi.fn() };
+    const [loadedToken, setLoadedToken] = useState<string | null>(null);
+    useEffect(() => {
+      const t = setTimeout(() => setLoadedToken(options.token), 0);
+      return () => clearTimeout(t);
+    }, [options.token]);
+    const open = () => {
+      link.openedTokens.push(loadedToken);
+      link.open();
+    };
+    return { open, ready: loadedToken !== null, error: null, exit: vi.fn(), submit: vi.fn() };
   },
 }));
 
@@ -72,6 +85,7 @@ const SUCCESS_META = {
 beforeEach(() => {
   link.options = null;
   link.open.mockReset();
+  link.openedTokens = [];
 });
 afterEach(cleanup);
 
@@ -91,6 +105,7 @@ describe("BankConnectionsPanel", () => {
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
     expect(link.open).toHaveBeenCalledOnce();
+    expect(link.openedTokens).toEqual(["link-new-token"]);
   });
 
   it("exchanges the public token with Link's metadata, then reports the first sync", async () => {
@@ -147,7 +162,11 @@ describe("BankConnectionsPanel", () => {
 
     await waitFor(() => expect(api.createLinkToken).toHaveBeenCalledWith("item-1"));
     await waitFor(() => expect(link.options?.token).toBe("link-update-token"));
-    await waitFor(() => expect(link.open).toHaveBeenCalled()); // opens once the token is ready
+    // Opens once the *update* token's handler is ready — never the new-connection handler,
+    // which would create a second Item while the panel thought it was repairing the first.
+    await waitFor(() => expect(link.open).toHaveBeenCalledOnce());
+    expect(link.openedTokens).toEqual(["link-update-token"]);
+    expect(screen.getByRole("button", { name: "Connect bank" })).toHaveProperty("disabled", true);
 
     // Update mode: Link returns no public token.
     await act(async () => {
