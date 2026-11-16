@@ -119,8 +119,10 @@ transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 â
 2. Logged in as the owner, **Disconnect** First Platypus Bank in the new panel (live test of
    `/item/remove`). The purge refuses to run while any connection is still linked.
 3. Dry run: `cd backend && AWS_PROFILE=ledgerly-dev .venv/bin/python -m ops.purge_plaid_sandbox
-   --sub <owner sub>`. Expect 701 items and fingerprint `d703a6664435`; anything else is a
-   reason to stop and look.
+   --sub <owner sub>`. Expect 701 items. The 2026-11-15 fingerprint was computed with the
+   connection record set aside (the script itself refuses while it exists), so **the
+   fingerprint this step prints, after the disconnect, is the one to use**. A count other
+   than 701 is a reason to stop and look.
 4. Execute: same command plus `--execute --selection <fingerprint>`. It writes a JSON manifest
    of every item to the temp directory first, deletes pointers â†’ syncs â†’ rows (re-runnable if
    it dies partway), then re-plans to confirm 0 remain.
@@ -129,6 +131,10 @@ transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 â
    `user_good` (it has the loan accounts), Sync now, Reconnect via the `sandbox_reset_login`
    invoke, Disconnect, and check that the dashboard leaves loan rows out.
 6. `build_check_acceptance`, then `/wrap-slice`.
+
+Note: `accountType` (which keeps loan rows out of the dashboard) is stamped from this deploy
+on; rows synced earlier lack it and are not backfilled. The only such rows are the Sandbox
+rows this runbook deletes, so nothing needs a backfill.
 
 ## Open questions
 

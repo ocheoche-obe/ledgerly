@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -104,13 +105,20 @@ def main(argv: list[str] | None = None) -> int:
     selected = set(plan.keys)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     manifest = Path(args.manifest_dir) / f"plaid-sandbox-purge-{stamp}.json"
-    manifest.write_text(json.dumps(
-        [i for i in items if i["sk"] in selected], default=str, indent=1))
+    # Owner-only: it holds raw Plaid payloads, and a shared /tmp would expose them.
+    fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump([i for i in items if i["sk"] in selected], fh, default=str, indent=1)
     print(f"Manifest of the {len(selected)} items written to {manifest}")
 
-    with table.batch_writer() as batch:  # chunks of 25 and retries unprocessed items itself
-        for sk in plan.keys:
-            batch.delete_item(Key={"pk": f"USER#{args.sub}", "sk": sk})
+    # One batch_writer per phase. A single writer re-buffers throttled deletes and can send
+    # them in the same batch as later rows, and a batch has no internal order — so a row could
+    # go before its pointer, stranding the pointer as unprovable if the run then died. Each
+    # phase is fully flushed (the `with` exits) before the next one starts.
+    for phase in (plan.pointers, plan.imports, plan.transactions):
+        with table.batch_writer() as batch:
+            for sk in phase:
+                batch.delete_item(Key={"pk": f"USER#{args.sub}", "sk": sk})
 
     try:
         remaining = plan_sandbox_purge(_read_partition(table, args.sub))

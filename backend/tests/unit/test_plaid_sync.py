@@ -336,6 +336,27 @@ def test_first_sync_adds_rows_flags_pending_and_enqueues_them(env):
     assert sorted(env.drain_queue()) == ["p1", "t1", "t2"]
 
 
+
+def test_a_loan_row_keeps_its_type_when_its_account_drops_out_of_accounts_get(env):
+    loan = {"account_id": "acc-loan", "name": "Auto Loan", "mask": "5000", "type": "loan",
+            "subtype": "auto", "balances": {"current": 9000, "iso_currency_code": "USD"}}
+    both = {"accounts": [ACCOUNT, loan], "item": {"item_id": ITEM_ID,
+            "institution_id": "ins_109508", "institution_name": "First Platypus Bank"}}
+    env.plaid.accounts_get = lambda *, access_token: both
+    env.link()
+    env.run_worker(page(added=[{**txn("l1", amount=-514.0), "account_id": "acc-loan"}],
+                        next_cursor="c1"))
+    assert env.txns()["l1"]["accountType"] == "loan"
+
+    # The loan account closes and /accounts/get stops listing it, but Plaid still sends an
+    # update for its old payment. The row must stay a loan row (not start counting as income).
+    env.plaid.accounts_get = lambda *, access_token: {**both, "accounts": [ACCOUNT]}
+    env.run_worker(page(modified=[{**txn("l1", amount=-515.0), "account_id": "acc-loan"}],
+                        next_cursor="c2"))
+    row = env.txns()["l1"]
+    assert row["amountCents"] == 51500
+    assert row["accountType"] == "loan"
+
 def test_a_second_sync_with_nothing_new_adds_zero(env):
     env.link()
     env.run_worker(page(added=[txn("t1")], next_cursor="c1"))
