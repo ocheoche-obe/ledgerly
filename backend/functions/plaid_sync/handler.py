@@ -137,10 +137,9 @@ def _sync(sub: str, item_id: str, import_id: str) -> dict:
     fetched = client.accounts_get(access_token=access_token).get("accounts") or []
     accounts = [account_view(a) for a in fetched] or item.get("accounts", [])
     labels = account_labels(accounts)
-    # Stored types first, fresh ones over them: an account /accounts/get stops returning (a
-    # closed loan) must not lose its type on a `modified` row, or that row's loan payment
-    # would start counting as income again (accountType is a source field, so an absent
-    # value is removed).
+    # Stored types first, fresh ones over them, for rows *added* while an account is briefly
+    # unlisted. Rows already stored keep their type regardless (STICKY_SOURCE_FIELDS), since
+    # the stored account list itself is replaced by /accounts/get on every sync.
     types = {**account_types(item.get("accounts", [])), **account_types(accounts)}
 
     added = modified = merged = removed = skipped = pending_added = 0

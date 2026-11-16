@@ -137,3 +137,8 @@ SOURCE_FIELDS = (
     "authorizedDate",
     "currency",
 )
+
+# Source fields an update may change but never remove. `accountType` keeps loan rows out of
+# the dashboard; losing it because an account vanished from /accounts/get would be worse
+# than keeping the last known type.
+STICKY_SOURCE_FIELDS = frozenset({"accountType"})

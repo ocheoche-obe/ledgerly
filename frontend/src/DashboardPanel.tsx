@@ -168,7 +168,7 @@ export function DashboardPanel({
           {(totals.pendingCount ?? 0) > 0 && (
             <p className="ldg-note ldg-note-pending">
               Includes <strong>{formatCents(totals.pendingSpentCents ?? 0)}</strong> in{" "}
-              {totals.pendingCount} pending charge{totals.pendingCount === 1 ? "" : "s"} — the
+              {totals.pendingCount} pending transaction{totals.pendingCount === 1 ? "" : "s"} — the
               bank hasn't posted {totals.pendingCount === 1 ? "it" : "them"} yet, so the amount
               can still change or drop off.
             </p>
@@ -238,7 +238,9 @@ export function DashboardPanel({
                     {isIncome ? formatCents(-row.spentCents) : formatCents(row.spentCents)}
                     {(row.pendingSpentCents ?? 0) !== 0 && (
                       <span className="ldg-pending" title="Not yet posted by the bank">
-                        {formatCents(Math.abs(row.pendingSpentCents ?? 0))} pending
+                        {/* Same sign convention as the figure beside it, so a pending
+                            refund in a spending row reads as negative, not as more spend. */}
+                        {formatCents(isIncome ? -(row.pendingSpentCents ?? 0) : (row.pendingSpentCents ?? 0))} pending
                       </span>
                     )}
                   </span>

@@ -357,6 +357,14 @@ def test_a_loan_row_keeps_its_type_when_its_account_drops_out_of_accounts_get(en
     assert row["amountCents"] == 51500
     assert row["accountType"] == "loan"
 
+    # A sync later the stored account list no longer has the loan either (it is replaced by
+    # /accounts/get each time), and another update arrives. The type must still hold.
+    env.run_worker(page(modified=[{**txn("l1", amount=-516.0), "account_id": "acc-loan"}],
+                        next_cursor="c3"))
+    row = env.txns()["l1"]
+    assert row["amountCents"] == 51600
+    assert row["accountType"] == "loan"
+
 def test_a_second_sync_with_nothing_new_adds_zero(env):
     env.link()
     env.run_worker(page(added=[txn("t1")], next_cursor="c1"))

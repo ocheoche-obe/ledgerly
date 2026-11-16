@@ -36,7 +36,7 @@ from core.imports import (
 )
 from core.merchant_rules import rule_sk
 from core.plaid_items import plaid_item_sk, plaid_txn_pointer_sk
-from core.plaid_normalize import SOURCE_FIELDS
+from core.plaid_normalize import SOURCE_FIELDS, STICKY_SOURCE_FIELDS
 from core.settings import default_profile, settings_view
 from core.transactions import (
     OWNER_SET_STATUSES,
@@ -808,7 +808,11 @@ def update_plaid_transaction(
 
     changed = {f: item_body[f] for f in SOURCE_FIELDS
                if f in item_body and stored.get(f) != item_body[f]}
-    dropped = [f for f in SOURCE_FIELDS if f not in item_body and f in stored]
+    # accountType is sticky: once a row is known to be a loan row it stays one, even after
+    # the account drops out of /accounts/get (a closed loan) and the stored account list
+    # forgets it — otherwise its payment would start counting as income again.
+    dropped = [f for f in SOURCE_FIELDS
+               if f not in item_body and f in stored and f not in STICKY_SOURCE_FIELDS]
     if not changed and not dropped:
         return "unchanged", status
 

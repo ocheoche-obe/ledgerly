@@ -128,7 +128,7 @@ describe("DashboardPanel", () => {
         reloadKey={0}
       />,
     );
-    expect(await screen.findByText(/2 pending charges/)).toBeTruthy();
+    expect(await screen.findByText(/2 pending transactions/)).toBeTruthy();
     expect(screen.getByText("$42.00 pending")).toBeTruthy();
     expect(screen.getAllByText(/pending$/)).toHaveLength(1); // only the row that has some
   });

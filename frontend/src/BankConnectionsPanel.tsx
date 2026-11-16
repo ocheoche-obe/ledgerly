@@ -150,7 +150,11 @@ export function BankConnectionsPanel({
         await prepareNewLink();
         return;
       }
-      if (!publicToken) return;
+      if (!publicToken) {
+        // Nothing to exchange, but this session's token is spent: mint a fresh one.
+        await prepareNewLink();
+        return;
+      }
       setBusy("Connecting…");
       try {
         const connected = await api.exchangePublicToken({

@@ -44,3 +44,6 @@ infra/*-outputs.json
 
 # Plaid Sandbox purge manifests (backend/ops/purge_plaid_sandbox.py) hold raw Plaid payloads.
 plaid-sandbox-purge-*.json
+
+# Playwright MCP page snapshots / console logs (contain on-screen data and the signed-in email).
+.playwright-mcp/
