@@ -316,9 +316,7 @@ export function BankConnectionsPanel({
               </div>
               {c.errorCode && (
                 <p role="alert" style={{ ...styles.error, margin: "6px 0 0" }}>
-                  {c.needsReconnect
-                    ? "The bank needs you to log in again before it can sync. Use Reconnect."
-                    : `The last sync failed (${c.errorCode}). Try Sync now again later.`}
+                  {syncErrorCopy(c)}
                 </p>
               )}
               {c.accounts.length > 0 && (
@@ -423,4 +421,15 @@ function relativeTime(iso: string): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} h ago`;
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** What a failed sync means for the owner, and what to do next. Every state names an action. */
+export function syncErrorCopy(c: Pick<BankConnection, "errorCode" | "needsReconnect">): string {
+  if (c.needsReconnect) return "The bank needs you to log in again before it can sync. Use Reconnect.";
+  if (c.errorCode === "ITEM_LOCKED") {
+    // Retrying cannot help: the bank has locked the account until the owner unlocks it there.
+    return "Your bank has locked this account. Unlock it with the bank, then use Sync now.";
+  }
+  return `The last sync failed (${c.errorCode}). Use Sync now to retry; if it keeps failing, ` +
+    "Disconnect and connect the bank again.";
 }

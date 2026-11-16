@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaidLinkOptionsWithLinkToken } from "react-plaid-link";
-import { BankConnectionsPanel } from "./BankConnectionsPanel";
+import { BankConnectionsPanel, syncErrorCopy } from "./BankConnectionsPanel";
 import { ApiError, type Api, type BankConnection, type ImportSummary } from "./api";
 
 // Plaid Link itself is a third-party iframe, so it is replaced by a fake hook that records the
@@ -224,5 +224,13 @@ describe("BankConnectionsPanel", () => {
     );
     await waitFor(() => expect(container.innerHTML).toBe(""));
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("gives every failed-sync state a next step the owner can take", () => {
+    expect(syncErrorCopy({ errorCode: "ITEM_LOGIN_REQUIRED", needsReconnect: true })).toMatch(/Use Reconnect/);
+    expect(syncErrorCopy({ errorCode: "ITEM_LOCKED", needsReconnect: false })).toMatch(/Unlock it with the bank/);
+    const other = syncErrorCopy({ errorCode: "ACCESS_NOT_GRANTED", needsReconnect: false });
+    expect(other).toMatch(/ACCESS_NOT_GRANTED/);
+    expect(other).toMatch(/Disconnect and connect the bank again/);
   });
 });
