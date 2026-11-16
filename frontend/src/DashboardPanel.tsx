@@ -174,6 +174,15 @@ export function DashboardPanel({
             </p>
           )}
 
+          {(totals.excludedCount ?? 0) > 0 && (
+            <p className="ldg-note">
+              {totals.excludedCount} loan-account transaction
+              {totals.excludedCount === 1 ? " isn't" : "s aren't"} counted here. A loan payment is
+              money moving between your own accounts, not spending; loan balances are under{" "}
+              <strong>Bank connections</strong>.
+            </p>
+          )}
+
           {totals.uncategorizedCount > 0 && (
             <p className="ldg-note">
               {totals.uncategorizedCount} transaction

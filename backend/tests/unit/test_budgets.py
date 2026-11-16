@@ -191,6 +191,38 @@ def test_empty_cycle_produces_zero_totals_not_an_error():
         "moneyInCents": 0, "moneyOutCents": 0, "netCents": 0, "budgetedCents": 0,
         "spentAgainstBudgetCents": 0, "remainingCents": 0,
         "transactionCount": 0, "uncategorizedCount": 0,
-        "pendingSpentCents": 0, "pendingCount": 0,
+        "pendingSpentCents": 0, "pendingCount": 0, "excludedCount": 0,
     }
     assert result["cycle"] == CYCLE
+
+
+# --- loan accounts stay out of the figures (owner decision 2026-11-15) -------------------
+
+def test_excluded_account_rows_count_toward_nothing():
+    loan_payment = {**_txn(51400, INCOME), "accountId": "auto-loan-5000"}
+    loan_interest = {**_txn(-3100, None), "accountId": "auto-loan-5000"}
+    groceries = {**_txn(-2500, GROC), "accountId": "plaid-checking-0000"}
+
+    result = summarize(
+        cycle=CYCLE, categories=CATEGORIES, budgets=[],
+        transactions=[loan_payment, loan_interest, groceries],
+        excluded_account_ids=frozenset({"auto-loan-5000"}),
+    )
+
+    rows = _rows(result)
+    assert rows[INCOME]["spentCents"] == 0  # the payment no longer reads as income
+    assert UNCATEGORIZED_ROW_ID not in rows  # nor does the interest row surface there
+    assert rows[GROC]["spentCents"] == 2500
+    totals = result["totals"]
+    assert (totals["moneyInCents"], totals["moneyOutCents"]) == (0, 2500)
+    assert totals["transactionCount"] == 1
+    assert totals["excludedCount"] == 2
+
+
+def test_nothing_is_excluded_by_default():
+    result = summarize(
+        cycle=CYCLE, categories=CATEGORIES, budgets=[],
+        transactions=[{**_txn(-2500, GROC), "accountId": "auto-loan-5000"}],
+    )
+    assert result["totals"]["transactionCount"] == 1
+    assert result["totals"]["excludedCount"] == 0

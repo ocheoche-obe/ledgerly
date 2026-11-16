@@ -115,6 +115,8 @@ export interface CycleTotals {
   /** Already included in the figures above — the part of them that is not final yet. */
   pendingSpentCents?: number;
   pendingCount?: number;
+  /** Loan-account transactions in this window that none of the figures include. */
+  excludedCount?: number;
   truncated?: boolean;
 }
 

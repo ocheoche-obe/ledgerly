@@ -132,4 +132,19 @@ describe("DashboardPanel", () => {
     expect(screen.getByText("$42.00 pending")).toBeTruthy();
     expect(screen.getAllByText(/pending$/)).toHaveLength(1); // only the row that has some
   });
+
+  it("says when loan-account transactions are left out of the figures", async () => {
+    const withExcluded: CycleSummary = {
+      ...SUMMARY,
+      totals: { ...SUMMARY.totals, excludedCount: 35 },
+    };
+    render(
+      <DashboardPanel
+        api={fakeApi({ getCycleSummary: vi.fn().mockResolvedValue(withExcluded) })}
+        onError={vi.fn()}
+        reloadKey={0}
+      />,
+    );
+    expect(await screen.findByText(/35 loan-account transactions aren't counted here/)).toBeTruthy();
+  });
 });

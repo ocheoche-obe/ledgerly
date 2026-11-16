@@ -9,7 +9,12 @@ from decimal import Decimal
 import pytest
 
 from core.budgets import summarize
-from core.plaid_items import account_view, new_plaid_item, plaid_item_view
+from core.plaid_items import (
+    account_view,
+    dashboard_excluded_account_ids,
+    new_plaid_item,
+    plaid_item_view,
+)
 from core.plaid_normalize import normalize
 from core.plaid_sync import (
     MAX_RESTARTS,
@@ -324,3 +329,17 @@ def test_no_pending_means_zero_pending_everywhere():
     assert result["perCategory"][0]["pendingSpentCents"] == 0
     assert result["totals"]["pendingSpentCents"] == 0
     assert result["totals"]["pendingCount"] == 0
+
+
+def test_dashboard_excludes_loan_accounts_only():
+    items = [
+        {"accounts": [
+            {"accountId": "plaid-checking-0000", "type": "depository"},
+            {"accountId": "plaid-credit-card-3333", "type": "credit"},  # purchases are spend
+            {"accountId": "auto-loan-5000", "type": "loan"},
+        ]},
+        {"accounts": [{"accountId": "mortgage-loan-3000", "type": "loan"}]},
+        {},  # a record with no accounts yet
+    ]
+    assert dashboard_excluded_account_ids(items) == {"auto-loan-5000", "mortgage-loan-3000"}
+    assert dashboard_excluded_account_ids([]) == frozenset()

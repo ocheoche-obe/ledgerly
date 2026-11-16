@@ -80,6 +80,7 @@ def summarize(
     categories: list[dict],
     budgets: list[dict],
     transactions: list[dict],
+    excluded_account_ids: frozenset[str] = frozenset(),
 ) -> dict:
     """Budgets + a cycle's transactions → the dashboard payload (FR-5.1, architecture §3.3).
 
@@ -93,6 +94,11 @@ def summarize(
     money go", and the totals would not reconcile against the bank.
 
     Rows are ordered by the categories' ``sortOrder``, with Uncategorized last.
+
+    Transactions on ``excluded_account_ids`` (loan accounts — see
+    ``core.plaid_items.DASHBOARD_EXCLUDED_ACCOUNT_TYPES``) are left out of every figure, rows
+    and totals alike; ``totals.excludedCount`` says how many were, so the screen can say so
+    rather than let the numbers quietly disagree with the transaction list.
     """
     budget_by_cat = {b["categoryId"]: int(b["amountCents"]) for b in budgets}
 
@@ -104,7 +110,13 @@ def summarize(
     pending_net_by_cat: dict[str | None, int] = {}
     pending_count = 0
     money_in = money_out = 0
+    excluded_count = 0
+    counted = 0
     for txn in transactions:
+        if txn.get("accountId") in excluded_account_ids:
+            excluded_count += 1
+            continue
+        counted += 1
         amount = int(txn["amountCents"])
         cat_id = txn.get("categoryId")  # None → the Uncategorized row
         net_by_cat[cat_id] = net_by_cat.get(cat_id, 0) + amount
@@ -160,11 +172,13 @@ def summarize(
             "budgetedCents": budgeted,
             "spentAgainstBudgetCents": spent_against_budget,
             "remainingCents": budgeted - spent_against_budget,
-            "transactionCount": len(transactions),
+            "transactionCount": counted,
             "uncategorizedCount": count_by_cat.get(None, 0),
             # Already included in the figures above — the part of them that is not final yet.
             "pendingSpentCents": -sum(pending_net_by_cat.values()),
             "pendingCount": pending_count,
+            # Loan-account rows in this window that none of the figures above include.
+            "excludedCount": excluded_count,
         },
     }
 

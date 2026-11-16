@@ -64,13 +64,13 @@ def _categories(handler):
     return dynamo.list_categories(SUB)
 
 
-def _seed_txn(txn_id, *, date, amount_cents, category_id=None):
+def _seed_txn(txn_id, *, date, amount_cents, category_id=None, account_id="chase-5980"):
     dynamo = importlib.import_module("adapters.dynamo")
     dynamo._table.put_item(Item={
         "pk": f"USER#{SUB}", "sk": f"TXN#{date}#{txn_id}", "type": "TXN",
         "txnId": txn_id, "date": date, "amountCents": amount_cents,
         "direction": "credit" if amount_cents >= 0 else "debit",
-        "balanceCents": 100000, "accountId": "chase-5980", "descriptionRaw": "X",
+        "balanceCents": 100000, "accountId": account_id, "descriptionRaw": "X",
         "merchantNormalized": "x", "categoryId": category_id,
         "categoryStatus": "auto" if category_id else "uncategorized",
         "needsReview": False, "importId": "01IMP",
@@ -213,6 +213,29 @@ def test_summary_reports_uncategorized_money(cycles):
     summary = _body(cycles.handler(_event("GET", path_params={"cycleRef": "2026-07-10"}), None))
     assert summary["totals"]["uncategorizedCount"] == 1
     assert summary["perCategory"][-1]["spentCents"] == 4200
+
+
+def test_summary_leaves_loan_accounts_out(cycles):
+    dynamo = importlib.import_module("adapters.dynamo")
+    groceries = next(c for c in _categories(cycles) if c["name"] == "Groceries")
+    dynamo._table.put_item(Item={
+        "pk": f"USER#{SUB}", "sk": "PLAIDITEM#item-1", "type": "PLAIDITEM", "itemId": "item-1",
+        "accounts": [
+            {"accountId": "plaid-checking-0000", "type": "depository"},
+            {"accountId": "auto-loan-5000", "type": "loan"},
+        ],
+    })
+    _seed_txn("pay", date="2026-07-10", amount_cents=51400, account_id="auto-loan-5000")
+    _seed_txn("food", date="2026-07-11", amount_cents=-2500,
+              category_id=groceries["categoryId"], account_id="plaid-checking-0000")
+
+    totals = _body(cycles.handler(
+        _event("GET", path_params={"cycleRef": "2026-07-15"}), None))["totals"]
+
+    assert totals["moneyInCents"] == 0
+    assert totals["moneyOutCents"] == 2500
+    assert totals["excludedCount"] == 1
+    assert totals["uncategorizedCount"] == 0
 
 
 # --- auth & method mapping --------------------------------------------------------------
