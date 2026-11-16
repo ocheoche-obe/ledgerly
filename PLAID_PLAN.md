@@ -51,7 +51,8 @@ ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run a
 - [x] `adapters/plaid.py` — `/link/token/create`, `/item/public_token/exchange`,
       `/transactions/sync`, `/accounts/get` (keys in headers GUIDE-001; errors carry code/type/
       request_id only GUIDE-006, ITEM-002; backoff + jitter ITEM-004/013; Sandbox host only)
-- [ ] `/item/remove` (disconnect, ITEM-005) — not built yet; goes with the SPA panel
+- [x] `/item/remove` (disconnect, ITEM-005) — `DELETE /plaid/items/{itemId}`: Plaid first,
+      then the token, then the record; transactions kept (PR #62)
 - [x] `core/plaid_normalize.py` + tests (sign flip TXN-005, null merchant TXN-013, pending flag)
 - [x] `core/plaid_sync.py` + `plaid_sync` worker (buffer all pages, restart from the starting
       cursor on mutation, count 500, cursor saved last: TXN-002, TXN-007, TXN-011, DATA-007 —
@@ -65,7 +66,11 @@ ADR-014 accepted 2026-11-15. Backend built 2026-11-15; not yet deployed or run a
 - [x] Sandbox test actions (direct Lambda invoke only, refused outside Sandbox):
       `sandbox_link` (SANDBOX-003) and `sandbox_refresh` (TXN-014). `/transactions/refresh` is a
       billed add-on in Production (GUIDE-016) and is reachable only through that test action.
-- [ ] SPA "Bank connection" panel (WEB-001/002/003, WEB-020/021)
+- [x] SPA "Bank connections" panel (WEB-001/002/003, WEB-020/021): pre-initialized Link,
+      Sync now, update-mode Reconnect on `ITEM_LOGIN_REQUIRED`, Disconnect (PR #62)
+- [x] Loan accounts left out of the dashboard figures (owner decision below)
+- [x] Dev-only Cognito Sandbox test user `PlaidSandboxUser` (owner decision below)
+- [ ] Deployed to dev and run live (blocked on the owner's `cdk deploy`)
 
 ## Acceptance
 
@@ -88,6 +93,38 @@ adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
 
 - 2026-11-15 (owner): ADR-014 accepted as written. Pending transactions count toward "spent".
   Route paths `/plaid/link-token`, `/plaid/exchange`, `/plaid/sync` stand (GUIDE-020).
+- 2026-11-15 (owner): **Loan payments are transfers, not spend.** Accounts of Plaid type `loan`
+  are left out of every dashboard figure (`summarize(excluded_account_ids=...)`); the dashboard
+  says how many rows it left out, and loan balances stay on Bank connections. A "Transfer"
+  category for card payments etc. waits for Slice 7.
+- 2026-11-15 (owner): **Sandbox data lives under its own Cognito user** (`PlaidSandboxUser`,
+  dev only, a `+sandbox` plus-address of the owner's email), isolated by the `USER#<sub>`
+  partition (ADR-006). The Sandbox rows already in the owner's partition are deleted with
+  `backend/ops/purge_plaid_sandbox.py` — approved, but **not before the deploy is done and the
+  live checks are ready** (owner's condition).
+- Proposed, owner to confirm: new route paths `GET /plaid/items`,
+  `DELETE /plaid/items/{itemId}`, and `POST /plaid/link-token {itemId}` for update mode.
+
+## Runbook: move Sandbox off the owner's partition (owner-approved, not yet run)
+
+Dry run 2026-11-15 (read-only) on the owner's partition: **701 items** selected — 349 Sandbox
+transactions, 349 `PLAIDTXN#` pointers, 3 Plaid sync imports, dated 2026-08-21 → 2026-11-15;
+0 Plaid-looking items left alone. Kept: 153 Chase CSV rows (Jun–Jul), 8 Slice-5 smoke rows
+(Aug), 15 categories, 4 CSV imports, the profile. PITR is enabled (35 days) and is the undo.
+
+1. Owner: deploy `Ledgerly-dev` from the PR branch. This creates the Sandbox user; Cognito
+   emails its temporary password to the `+sandbox` address.
+2. Logged in as the owner, **Disconnect** First Platypus Bank in the new panel (live test of
+   `/item/remove`). The purge refuses to run while any connection is still linked.
+3. Dry run: `cd backend && AWS_PROFILE=ledgerly-dev .venv/bin/python -m ops.purge_plaid_sandbox
+   --sub <owner sub>`. Expect 701; anything else is a reason to stop and look.
+4. Execute: same command plus `--execute --expect 701`. It writes a JSON manifest of every item
+   first, deletes, then re-plans to confirm 0 remain.
+5. Owner logs in once as the Sandbox user (sets its password; Claude never sees it). Live test
+   there: connect First Platypus as `user_transactions_dynamic` and a second institution as
+   `user_good` (it has the loan accounts), Sync now, Reconnect via the `sandbox_reset_login`
+   invoke, Disconnect, and check that the dashboard leaves loan rows out.
+6. `build_check_acceptance`, then `/wrap-slice`.
 
 ## Open questions
 

@@ -30,6 +30,7 @@ BACKEND_ASSET_EXCLUDE = [
     # Not runtime code.
     "tests",
     "eval",
+    "ops",  # owner-run maintenance scripts (e.g. the Plaid Sandbox purge), never a Lambda
     # Build/tool droppings. `.venv` and the caches are gitignored but NOT excluded by git
     # status here — CDK globs the directory as-is (see module docstring).
     ".venv",

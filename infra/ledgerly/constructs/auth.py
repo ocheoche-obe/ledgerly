@@ -8,7 +8,7 @@ from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_cognito as cognito
 from constructs import Construct
 
-from ledgerly.config import OWNER_EMAIL, StageConfig
+from ledgerly.config import OWNER_EMAIL, SANDBOX_TEST_EMAIL, StageConfig
 
 
 class AuthConstruct(Construct):
@@ -85,6 +85,25 @@ class AuthConstruct(Construct):
                 cognito.CfnUserPoolUser.AttributeTypeProperty(name="email_verified", value="true"),
             ],
         )
+
+        # Plaid Sandbox test user, only on stages that talk to Plaid (dev). Sandbox Items are
+        # linked while logged in as this user, so fake bank data never lands in the owner's
+        # partition. The logical ID contains "Plaid" so check_prod_has_no_plaid.py also
+        # proves prod never gets it.
+        if stage.plaid_env is not None:
+            cognito.CfnUserPoolUser(
+                self,
+                "PlaidSandboxUser",
+                user_pool_id=self.user_pool.user_pool_id,
+                username=SANDBOX_TEST_EMAIL,
+                desired_delivery_mediums=["EMAIL"],
+                user_attributes=[
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email", value=SANDBOX_TEST_EMAIL),
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email_verified", value="true"),
+                ],
+            )
 
     @property
     def hosted_ui_base_url(self) -> str:
