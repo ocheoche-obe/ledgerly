@@ -18,3 +18,15 @@ export function makeUserManager(cfg: AppConfig): UserManager {
     automaticSilentRenew: true,
   });
 }
+
+/**
+ * Cognito's Hosted UI logout URL. Cognito does not implement OIDC RP-initiated logout: its
+ * `/logout` wants `client_id` + `logout_uri` (which must be one of the app client's sign-out
+ * URLs), not `post_logout_redirect_uri` + `id_token_hint`. oidc-client-ts's `signoutRedirect()`
+ * sends the standard names, so Cognito answered "Client does not exist" and kept its own
+ * session alive, meaning the next "Log in" signed the same user straight back in.
+ */
+export function cognitoLogoutUrl(cfg: AppConfig): string {
+  const params = new URLSearchParams({ client_id: cfg.userPoolClientId, logout_uri: cfg.redirectUri });
+  return `${cfg.cognitoDomain}/logout?${params.toString()}`;
+}

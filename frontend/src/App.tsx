@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { User, UserManager } from "oidc-client-ts";
 import { loadConfig, type AppConfig } from "./config";
-import { makeUserManager } from "./auth";
+import { cognitoLogoutUrl, makeUserManager } from "./auth";
 import {
   makeApi,
   type Api,
@@ -96,12 +96,14 @@ export default function App() {
   };
 
   const login = () => mgr?.signinRedirect();
-  const logout = () => {
+  const logout = async () => {
     setSettings(null);
     setCategories(null);
     setTxns(null);
     setApi(null);
-    mgr?.signoutRedirect();
+    // Drop the local tokens, then end the Cognito session too (see cognitoLogoutUrl).
+    await mgr?.removeUser();
+    if (cfg) window.location.assign(cognitoLogoutUrl(cfg));
   };
 
   return (
