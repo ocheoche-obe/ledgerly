@@ -163,7 +163,7 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
   0 new; reconnect via update mode (no exchange, no second Item); disconnect; a second persona
   (`user_good`, 48 rows). Added / modified / removed exercised live with `user_transactions_dynamic` + `/transactions/refresh` (294 modified; 18 added + 14 pending→posted merges); a correction surviving `modified` is unit-tested only (no correction UI before Slice 7). Plaid build-kit acceptance round 1: PASS. `prod` synth has no
   Plaid resources (CI). Tokens absent from logs, responses and table items (security review +
-  log inspection). 342 backend + 32 frontend tests.
+  log inspection). 341 backend + 32 frontend tests.
 - **Actual cost / resource use:** Plaid Sandbox is free. AWS month-to-date on 2026-11-16:
   **$0.0003** (S3). Bedrock spend for ~380 categorizations did not register at the cent level.
 - **What worked:** ADR-014's "Plaid is just another producer" held exactly — categorizer, cycles

@@ -381,7 +381,7 @@ showed phantom changes until `infra/.venv` was re-synced and the CLI pinned to 2
 ### B-11 — Slice 9 review findings deliberately deferred 🆕
 
 **Noticed:** Slice 9 wrap (2026-11-16), from `/code-review medium` and three blind `/review-pr`
-rounds on PR #62. **Type:** robustness / tech-debt. **Likely home:** the Plaid webhooks slice,
+rounds on PR #62 (plus the final round's nits; the token-secret race below was flagged again there). **Type:** robustness / tech-debt. **Likely home:** the Plaid webhooks slice,
 or Slice 7 where noted. None is a security issue (the security review found none).
 
 | Finding | Why deferred | Likely fix |
@@ -393,6 +393,8 @@ or Slice 7 where noted. None is a security issue (the security review found none
 | `react-plaid-link` binds `onSuccess`/`onExit` when the handler is created, so they see that render's state | One handler per token (keyed session) keeps the window short; nothing reads stale state today | Route callbacks through a ref |
 | No "still importing history" state from Plaid's `historical_update_complete` | Sandbox backfills in seconds | Needs webhooks |
 | Link exit metadata (`link_session_id`, error) is shown, not stored server-side | Connect funnel is one person | A small `POST /plaid/link-events` |
+| Loan-account rows are still sent to the categorizer, though the dashboard excludes them (final `/review-pr` nit) | About a cent of Bedrock per sync; the transaction list still shows those rows with a category | Skip the enqueue for `excluded_from_spend` rows, or give them a fixed "Loan" label |
+| If Plaid's Link script never loads during a Reconnect session, Connect bank stays disabled until a page reload (final `/review-pr` nit) | Recovery is a reload; no data at risk | A timeout that drops the update-mode session and restores the new-connection one |
 | Transfers between own accounts (card payment, CD deposit) count as spend | Owner-deferred to Slice 7 (ADR-015) | Transfer category; Plaid's `personal_finance_category` as an input |
 
 **Refs:** PR #62; ADR-014; ADR-015; `PLAID_PLAN.md` acceptance round 1.
