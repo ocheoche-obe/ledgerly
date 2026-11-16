@@ -1,7 +1,7 @@
 # Ledgerly — Build-Time Backlog
 
 **Status:** Living document — append as things are noticed; triage as slices are planned
-**Version:** 0.3
+**Version:** 0.4
 **Created:** 2026-07-21
 
 ---
@@ -343,10 +343,46 @@ CI failure on PR #44.
 
 ---
 
+### B-10 — No way to deploy a PR branch to dev except from the owner's laptop 🆕
+
+**Noticed:** Slice 9 (2026-11-15). **Type:** CI/CD / process. **Likely home:** a small cleanup
+PR (owner asked for it to be recorded; probably before Slice 10).
+
+`deploy.yml` deploys `dev` only on a push to `main`, so a branch reaches dev only *after* merge.
+But the Slice-5 rule ("deployed ≠ working") says a slice with live exit criteria isn't done until
+those criteria run against the deployed stack, which means verifying *before* the owner merges.
+The only way to do that today is a workstation `cdk deploy Ledgerly-dev`, which ADR-011 meant to
+retire ("zero long-lived keys, no workstation deploys").
+
+What happened in Slice 9: the agent's `cdk deploy` was denied by the Claude Code permission
+classifier twice ("undermining oversight"); a `!`-prefixed command the owner sent from another
+device arrived as chat text, not a shell command, so nothing ran; the owner then added an
+**exact-match** allow rule to `.claude/settings.local.json` (dev stack, pinned CLI, no wildcard
+so it cannot match `Ledgerly-prod`). That works, but it moves deploy rights onto the agent with
+no audit trail beyond the session transcript.
+
+**Proposed fix:** a `workflow_dispatch` trigger (input: branch/ref) on a dev-only deploy job,
+reusing the `checks.yml` gate and the `cdk-deploy` composite action with the existing narrow
+`ledgerly-github-deploy` OIDC role (ADR-011). Then "deploy this branch to dev" is one
+`gh workflow run` (or a button), gated by the same tests as `main`, logged in GitHub, and
+needing no AWS credentials on the agent's side. Once it exists, **remove the local allow rule**.
+
+Things to settle when building it: a dispatch must never target `prod` (hard-code the stage, no
+input for it); `main` and a dispatched branch can overwrite each other's dev deploy, so a
+concurrency group plus a note in the run summary of *which ref* dev is on; and whether `gh
+workflow run` itself needs an allow rule (it's a write to GitHub, not to AWS).
+
+**Refs:** `.github/workflows/deploy.yml`; `.github/actions/cdk-deploy`; ADR-011; CLAUDE.md
+"Deployed ≠ working"; PR #62. Local-toolchain drift hit again here too ([B-9]): `cdk diff`
+showed phantom changes until `infra/.venv` was re-synced and the CLI pinned to 2.1148.1.
+
+---
+
 ## Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-07-21 | Backlog doc created (seeded B-1 account picker, B-2 txn pagination/window, B-3 frontend visual pass). Boundary vs. the plan's post-MVP parking lot + the triage flow defined. |
+| 0.4 | 2026-11-15 | [B-10] added (Slice 9): no way to deploy a PR branch to dev except a workstation `cdk deploy`; proposed `workflow_dispatch` dev deploy on the existing OIDC role, after which the local allow rule goes. |
 | 0.3 | 2026-08-07 | [B-9] added from a red CI on PR #44: both venvs were installed *below their own manifests' floors* (ruff 0.15.21 vs `>=0.16.0`; aws-cdk-lib 2.261.0 vs `>=2.262.2`), so the local lint gate passed on code CI rejected. |
 | 0.2 | 2026-08-07 | Slice 6: [B-7] built (`POST /transactions/recategorize` — needs a live run to actually rescue the stranded data) and [B-6] closed (infra pinned to compatible-minor; the predicted drift was real — local venv was below the file's own floor — but produced no template drift). Both marked ✅ with their findings recorded. |
