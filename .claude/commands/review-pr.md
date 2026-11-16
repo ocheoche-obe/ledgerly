@@ -25,4 +25,5 @@ was built.
    real, false positive (with the reason), or already known. Don't silently drop any.
 
 Do not fix anything as part of this command. Fixing blockers is the caller's next step, and
-CLAUDE.md says the owner hears what the review found before being asked to merge.
+CLAUDE.md ("Who merges") says a PR merges only once this review reports no blockers on its
+final state and CI is green, and the owner hears what it found when the merge is reported.

@@ -107,14 +107,29 @@ Ledgerly is an explicit learning vehicle, and most of the code here is agent-gen
 is how the owner's understanding keeps pace with what's actually deployed. Skip it only if the
 slice is trivial or docs-only — and say so rather than silently omitting it.
 
-## 8. Hand off
+## 8. Blind review, then merge (owner cadence, 2026-11-16)
+
+After steps 4–7 have landed on the branch, the PR is in its **final state**. Then:
+
+1. Run **`/review-pr`** on it — a fresh, read-only subagent that has not seen this conversation.
+2. **Blockers?** Fix them, push, wait for CI, and run `/review-pr` again on the new state.
+   Repeat until a round reports **no blockers**.
+3. **CI green on that same commit?** (`gh pr checks <N>` — every check passing.)
+4. When both hold: `gh pr ready <N>` (if a draft), then **merge it yourself**
+   (`gh pr merge <N> --squash --delete-branch`, matching how earlier slices merged).
+
+**Do not merge — stop and ask the owner — if the PR deletes data, touches prod, or needs an
+owner decision** (CLAUDE.md "Who merges"). Merging deploys `dev` via `deploy.yml`; **prod
+promotion stays the owner's manual approval** — never approve the `prod` environment gate.
+
+## 9. Hand off
 
 Tell the user, explicitly:
 
-- PR URL and what's in it.
+- PR URL, what's in it, and **that it was merged** (or why it was not).
+- What each review found — `/security-review`, `/code-review`, every `/review-pr` round —
+  and how each blocker/should-fix was fixed or deferred (and where it was routed).
 - The explainer path from step 7 (or why it was skipped).
-- That after they merge, the next `/start-slice` will fast-forward local `main`.
+- That `dev` deploys on merge and **prod waits for their approval** in GitHub.
 - Any threads deliberately left open, so they land in the next session's plan rather than
   being forgotten.
-
-Do not merge the PR yourself; merging is the user's call.

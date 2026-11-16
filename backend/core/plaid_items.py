@@ -158,7 +158,7 @@ def account_types(accounts: list[dict]) -> dict[str, str]:
 
 
 # Plaid account types whose transactions stay out of the dashboard's spend figures
-# (owner decision, 2026-11-15). A loan account reports each payment as a *credit* - the
+# (owner decision 2026-11-15, ADR-015). A loan account reports each payment as a *credit* - the
 # balance owed went down - so counted as-is it reads as income and nets spend down, and the
 # same payment leaving checking would be counted a second time once that side is synced.
 # Debt spending is counted once, where the cash leaves. Loan balances stay visible on the

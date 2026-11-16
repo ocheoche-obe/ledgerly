@@ -1,7 +1,7 @@
 # Ledgerly — Evaluation & Retrospective
 
 **Status:** Living document — updated at each slice wrap and each release
-**Last updated:** 2026-07-15
+**Last updated:** 2026-11-16
 
 > Lifecycle stage 6. This is the hinge that turns the cycle: it measures what actually
 > shipped against what we *said* we wanted, and its findings become the inputs to the next
@@ -156,6 +156,37 @@ Tie metrics back to the requirements doc so evaluation is objective, not vibes.
   - `/code-review` finding: rule-hit path doesn't re-validate the rule's category → **backlog B-4**
     → Slice 7 (rule creation); not triggerable now (rules table empty this slice).
 
+### Slice 9 — Plaid Sandbox ingest (2026-11-16)
+- **Met exit criteria?** Yes, against the deployed `dev` stack through the real UI (Playwright,
+  signed in as the dev-only Sandbox user): link First Platypus from the SPA → 331 rows, 330
+  categorized in ~90 s, shown on the dashboard with pending and loan-exclusion notes; second sync
+  0 new; reconnect via update mode (no exchange, no second Item); disconnect; a second persona
+  (`user_good`, 48 rows). Added / modified / removed exercised live with `user_transactions_dynamic` + `/transactions/refresh` (294 modified; 18 added + 14 pending→posted merges); a correction surviving `modified` is unit-tested only (no correction UI before Slice 7). Plaid build-kit acceptance round 1: PASS. `prod` synth has no
+  Plaid resources (CI). Tokens absent from logs, responses and table items (security review +
+  log inspection). 342 backend + 32 frontend tests.
+- **Actual cost / resource use:** Plaid Sandbox is free. AWS month-to-date on 2026-11-16:
+  **$0.0003** (S3). Bedrock spend for ~380 categorizations did not register at the cent level.
+- **What worked:** ADR-014's "Plaid is just another producer" held exactly — categorizer, cycles
+  and budgets needed no change beyond pending and loan exclusion. The **blind `/review-pr`
+  subagent** (new this slice) earned its place: three rounds, zero blockers, but real should-fixes
+  every round — a `react-plaid-link` stale-handler bug that would have orphaned a live Item, a
+  loan exclusion that a disconnect would have silently undone, and a purge whose crash-recovery
+  ordering was wrong. Driving the real UI with Playwright found two bugs no test could: the
+  Cognito logout (broken since Slice 1) and a dead-end error message for a locked account.
+- **What surprised us / didn't work:** (1) The agent could not deploy: the permission classifier
+  blocked `cdk deploy` twice, and a `!` command sent from another device arrives as chat text, not
+  a shell command. Solved with an exact-match allow rule; the real fix is a dispatchable dev
+  deploy ([B-10]). (2) Sandbox data in the owner's partition was a worse idea in practice than on
+  paper (ADR-014 → ADR-015). (3) Plaid's `user_good` data signs a payroll credit as an outflow —
+  Sandbox data shapes are not production evidence. (4) Local CDK drift again: a stale venv and an
+  old CLI produced a phantom `cdk diff` ([B-9]).
+- **Findings routed to:**
+  - Loan payments, Sandbox separation → **ADR-015** (owner decisions); Transfer category →
+    **Slice 7**.
+  - Dev deploy for PR branches → **backlog [B-10]**; deferred review findings → **backlog [B-11]**.
+  - Merge cadence: a clean blind review + green CI now merges without the owner (owner decision
+    2026-11-16) → **CLAUDE.md "Who merges"** + `/wrap-slice`.
+
 ---
 
 ## 3. Release / version retrospective
@@ -213,3 +244,4 @@ The lifecycle is Requirements → Architecture → Implementation → Testing �
 | 2026-07-17 | Slice 3 per-slice beat added (categories, settings & cycle engine — code-complete at PR; deploy/smoke-test post-merge via pipeline). `/code-review` adopted into `/wrap-slice` |
 | 2026-07-19 | Slice 3 beat finalized — deployed dev + prod on merge, all exit criteria met (owner smoke-test + unauth 401 verified) |
 | 2026-07-21 | Slice 5 per-slice beat added (AI categorization pipeline + eval harness — code-complete at PR; live criteria + accuracy baseline post-merge via pipeline). Key finding: Bedrock Opus 4.8/Sonnet 5 are INFERENCE_PROFILE-only |
+| 2026-11-16 | Slice 9 per-slice beat added (Plaid Sandbox ingest — verified live on dev, acceptance PASS) |

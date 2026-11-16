@@ -95,9 +95,23 @@ only to the code as it was verified — later changes invalidate it.
 
 ## How to test
 
-To be written with the code. Planned journey: sign in to the dev SPA → Bank connection → connect
-First Platypus Bank with `user_good` / `pass_good` → transactions appear and categorize → Sync now
-adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
+Always as the **dev Sandbox user** (`…+sandbox@gmail.com`), never the owner's account (ADR-015).
+
+1. **UI (Playwright, headed):** sign in → Bank connections → Connect bank → skip the phone step →
+   search "Platypus" (type it; a pasted value doesn't trigger search) → **First Platypus Bank**
+   (the non-OAuth one) → `user_transactions_dynamic` or `user_good` / `pass_good` → Share data →
+   "Finish without saving". Expect "N new", accounts listed, categories filling in within ~90 s.
+2. **Sync now** → "0 new · 0 unchanged".
+3. **Reconnect:** direct-invoke `ledgerly-dev-api-plaid` with
+   `{"action": "sandbox_reset_login", "sub": <sandbox sub>, "itemId": ...}` → Sync now shows
+   ITEM_LOGIN_REQUIRED + Reconnect → Reconnect → password only → no `/plaid/exchange` call.
+4. **Lifecycle (added/modified/removed):** `{"action": "sandbox_refresh", ...}` then sync; the
+   worker log (`PlaidSyncLogs`) reports `added`, `modified`, `merged` (pending→posted).
+   Without a browser, `POST /plaid/sync` can be driven by direct-invoking the Lambda with an
+   API-Gateway-shaped event carrying the Sandbox user's `sub` (IAM-only; dev only).
+5. **Disconnect** → confirm → "No banks connected yet"; dashboard still excludes loan rows.
+6. A second connection at the **same** institution is refused (409) by design — use Tartan Bank
+   (`ins_109511`) for a second persona.
 
 ## Decisions made
 
@@ -113,8 +127,8 @@ adds 0. Lifecycle: the `user_transactions_dynamic` test user (TXN-014).
   partition (ADR-006). The Sandbox rows already in the owner's partition are deleted with
   `backend/ops/purge_plaid_sandbox.py` — approved, but **not before the deploy is done and the
   live checks are ready** (owner's condition).
-- Proposed, owner to confirm: new route paths `GET /plaid/items`,
-  `DELETE /plaid/items/{itemId}`, and `POST /plaid/link-token {itemId}` for update mode.
+- 2026-11-16 (owner): route paths `GET /plaid/items` and `DELETE /plaid/items/{itemId}`
+  confirmed as built (GUIDE-020); update mode is `POST /plaid/link-token {itemId}`.
 
 ## Runbook: move Sandbox off the owner's partition (owner-approved, not yet run)
 

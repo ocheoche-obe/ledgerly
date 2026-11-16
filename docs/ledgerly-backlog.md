@@ -1,7 +1,7 @@
 # Ledgerly — Build-Time Backlog
 
 **Status:** Living document — append as things are noticed; triage as slices are planned
-**Version:** 0.4
+**Version:** 0.5
 **Created:** 2026-07-21
 
 ---
@@ -378,11 +378,33 @@ showed phantom changes until `infra/.venv` was re-synced and the CLI pinned to 2
 
 ---
 
+### B-11 — Slice 9 review findings deliberately deferred 🆕
+
+**Noticed:** Slice 9 wrap (2026-11-16), from `/code-review medium` and three blind `/review-pr`
+rounds on PR #62. **Type:** robustness / tech-debt. **Likely home:** the Plaid webhooks slice,
+or Slice 7 where noted. None is a security issue (the security review found none).
+
+| Finding | Why deferred | Likely fix |
+|---|---|---|
+| Nothing stops the owner linking a **Sandbox** bank while signed in as themselves (ADR-015's separation is a convention) | Needs an owner decision: enforce by user, or keep as convention while Plaid is Sandbox-only | Allow `/plaid/*` only for an allow-listed sub in `dev`, or a visible "Sandbox" warning on the owner's account |
+| The access-tokens secret is one JSON document with an unlocked read-modify-write; a concurrent connect + disconnect could drop a token | Single user; both actions are manual and seconds apart | One secret per Item, or a version-checked write |
+| Every non-retryable Plaid error is recorded on the connection, including an exhausted mutation-during-pagination restart, and a slow failing sync can overwrite a newer success's error-clear | Self-heals on the next good sync; no data is wrong | Treat restart exhaustion as transient; condition the error write on `lastSyncedAt` |
+| Purge script: sync records of a Sandbox connection with **no** surviving rows are reported, not deleted | Never happened in the real run (all 3 matched); the rule errs toward keeping data | Also select `IMPORT#` by `plaidEnv`-tagged connection IDs once imports carry `plaidEnv` |
+| `react-plaid-link` binds `onSuccess`/`onExit` when the handler is created, so they see that render's state | One handler per token (keyed session) keeps the window short; nothing reads stale state today | Route callbacks through a ref |
+| No "still importing history" state from Plaid's `historical_update_complete` | Sandbox backfills in seconds | Needs webhooks |
+| Link exit metadata (`link_session_id`, error) is shown, not stored server-side | Connect funnel is one person | A small `POST /plaid/link-events` |
+| Transfers between own accounts (card payment, CD deposit) count as spend | Owner-deferred to Slice 7 (ADR-015) | Transfer category; Plaid's `personal_finance_category` as an input |
+
+**Refs:** PR #62; ADR-014; ADR-015; `PLAID_PLAN.md` acceptance round 1.
+
+---
+
 ## Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-07-21 | Backlog doc created (seeded B-1 account picker, B-2 txn pagination/window, B-3 frontend visual pass). Boundary vs. the plan's post-MVP parking lot + the triage flow defined. |
+| 0.5 | 2026-11-16 | [B-11] added: Slice 9 review findings deliberately deferred (none security), each with its reason and likely fix. |
 | 0.4 | 2026-11-15 | [B-10] added (Slice 9): no way to deploy a PR branch to dev except a workstation `cdk deploy`; proposed `workflow_dispatch` dev deploy on the existing OIDC role, after which the local allow rule goes. |
 | 0.3 | 2026-08-07 | [B-9] added from a red CI on PR #44: both venvs were installed *below their own manifests' floors* (ruff 0.15.21 vs `>=0.16.0`; aws-cdk-lib 2.261.0 vs `>=2.262.2`), so the local lint gate passed on code CI rejected. |
 | 0.2 | 2026-08-07 | Slice 6: [B-7] built (`POST /transactions/recategorize` — needs a live run to actually rescue the stranded data) and [B-6] closed (infra pinned to compatible-minor; the predicted drift was real — local venv was below the file's own floor — but produced no template drift). Both marked ✅ with their findings recorded. |
