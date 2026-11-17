@@ -111,8 +111,8 @@ slice is trivial or docs-only — and say so rather than silently omitting it.
 
 After steps 4–7 have landed on the branch, the PR is in its **final state**. Then:
 
-1. Run **`/review-pr`** on it — a fresh, read-only subagent that has not seen this conversation.
-2. **Blockers?** Fix them, push, wait for CI, and run `/review-pr` again on the new state.
+1. Run **`/harness:review-pr`** on it — a fresh, read-only subagent that has not seen this conversation.
+2. **Blockers?** Fix them, push, wait for CI, and run `/harness:review-pr` again on the new state.
    Repeat until a round reports **no blockers**.
 3. **CI green on that same commit?** (`gh pr checks <N>` — every check passing.)
 4. When both hold: `gh pr ready <N>` (if a draft), then **merge it yourself**
@@ -127,7 +127,7 @@ promotion stays the owner's manual approval** — never approve the `prod` envir
 Tell the user, explicitly:
 
 - PR URL, what's in it, and **that it was merged** (or why it was not).
-- What each review found — `/security-review`, `/code-review`, every `/review-pr` round —
+- What each review found — `/security-review`, `/code-review`, every `/harness:review-pr` round —
   and how each blocker/should-fix was fixed or deferred (and where it was routed).
 - The explainer path from step 7 (or why it was skipped).
 - That `dev` deploys on merge and **prod waits for their approval** in GitHub.
