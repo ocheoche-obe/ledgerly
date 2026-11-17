@@ -9,7 +9,7 @@ lives here; the harness supplies the procedure, the generic checks and the repor
 Run from the repo root. These are the gates CI runs. A failing check is a blocker.
 
 1. `ruff check backend infra`
-2. `(cd backend && python -m pytest -q)`
+2. `(cd backend && python3 -m pytest -q)`. Use `python3`: CI's `python` is not on PATH on the review host.
 3. `(cd frontend && npm ci --no-audit --no-fund && npm run build && npm test)`.
    Report the frontend build and vitest separately, with vitest's pass count.
 4. `(cd infra && cdk synth --all -q && python check_prod_has_no_plaid.py)`. **Only if the diff
@@ -51,5 +51,5 @@ Run from the repo root. These are the gates CI runs. A failing check is a blocke
 
 ## Merge rule
 
-Unchanged by this file. See "Who merges" in `CLAUDE.md`: Claude merges once a blind review on the
-PR's final state reports no blockers and CI is green on that commit.
+Unchanged by this file. See "Who merges" in `CLAUDE.md`, including the cases that always wait for
+the owner.
