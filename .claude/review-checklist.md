@@ -12,7 +12,7 @@ Run from the repo root. These are the gates CI runs. A failing check is a blocke
 2. `(cd backend && python3 -m pytest -q)`. Use `python3`: CI's `python` is not on PATH on the review host.
 3. `(cd frontend && npm ci --no-audit --no-fund && npm run build && npm test)`.
    Report the frontend build and vitest separately, with vitest's pass count.
-4. `(cd infra && cdk synth --all -q && python check_prod_has_no_plaid.py)`. **Only if the diff
+4. `(cd infra && cdk synth --all -q && python3 check_prod_has_no_plaid.py)`. **Only if the diff
    touches `infra/` and `cdk` is installed**; otherwise mark it not run and say why. Skipping it
    for a diff that does not touch `infra/` does not make the verdict inconclusive.
 
