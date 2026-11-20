@@ -259,11 +259,16 @@ _Solidified at the end of Slice 1. Binding:_
   feature works. Slice 5 sat "deployed" for 12 days while every categorizer invocation failed on
   an ungranted Bedrock model agreement, because nobody ran the ☐ items. Option A ("deploy via the
   pipeline on merge") is a *shipping* strategy, not a *verification* strategy.
-- **Who merges (owner decision, 2026-11-16; supersedes the 2026-08-02 split):** Claude merges
-  **any** PR — slice or cleanup — once **both** hold: (1) a blind **`/harness:review-pr`** on the PR's
-  *final* state (after the doc updates) reports **no blockers**, and (2) **CI is green** on that
-  same commit. Blockers get fixed, CI re-runs, and `/harness:review-pr` re-runs on the new state before
-  merging. Afterwards, tell the owner what the reviews found and what was merged.
+- **Who merges (owner decision, 2026-11-16; pass required since 2026-11-20; supersedes the
+  2026-08-02 split):** Claude merges **any** PR — slice or cleanup — only when **both** hold on the
+  PR's *final* commit (after the doc updates): (1) a blind **`/harness:review-pr`** returns the
+  verdict **pass** for that exact commit, and (2) **CI is green** on that same commit.
+  - A **fail** or **inconclusive** verdict never merges without the owner. "No blockers" is not
+    enough: inconclusive means a check did not run, the commit could not be confirmed or the diff
+    was not fully read. Claude may fix the cause, push, let CI re-run and re-run
+    `/harness:review-pr` on the new commit; only a pass on the final commit, with CI green, lets
+    Claude merge. Otherwise stop and ask the owner.
+  - Afterwards, tell the owner what the reviews found and what was merged.
   - **Still waits for the owner, regardless of review/CI:** anything that **deletes data**,
     anything that **touches prod** (including approving the `prod` environment gate in
     `deploy.yml` — merging deploys `dev` only; prod promotion stays the owner's approval), and
@@ -276,7 +281,8 @@ _Solidified at the end of Slice 1. Binding:_
   as it stands on the base branch) that has not seen the building conversation, and reports
   blocker / should-fix / nit findings with file:line plus a pass / fail / inconclusive verdict
   bound to the commit it judged. **Fix every
-  blocker** (push, let CI re-run, and re-run `/harness:review-pr` if the fix was non-trivial), then
+  blocker** (push, let CI re-run, and re-run `/harness:review-pr` on the new commit, since a verdict
+  covers only the commit it judged), then
   **tell the owner what it found** — blockers and how each was fixed, should-fixes and what was
   done or deferred — when reporting the merge (see "Who merges"). It complements `/code-review` and `/security-review`; it doesn't replace them.
 
