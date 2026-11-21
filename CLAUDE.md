@@ -101,20 +101,34 @@ scope and exit criteria before coding) and `/wrap-slice` (verify live, `/securit
 blocking gate, `/code-review medium` as advisory, bring docs current, PR, `explain-diff`, blind
 review, merge, hand off). The skills in `.claude/skills/` hold the detail.
 
-**Blind review after every PR.** After opening any PR, slice or cleanup, run `/review-pr`. It
-reviews in a fresh read-only subagent that has not seen the building conversation; pass it
-nothing but the PR number. Fix every blocker and triage every should-fix.
+**Blind review after every PR.** After opening any PR, slice or cleanup, run
+`/harness:review-pr`, and again on the final commit before merging. It reviews in a fresh,
+read-only subagent (`harness:pr-reviewer`) that has not seen the building conversation and gets no
+summary of the work. It applies `.claude/review-checklist.md` as it stands on the base branch and
+returns blocker, should-fix and nit findings with file:line, plus a **pass**, **fail** or
+**inconclusive** verdict bound to the commit it judged. A verdict covers only that commit. Fix
+every blocker and triage every should-fix. It complements `/code-review` and `/security-review`;
+it doesn't replace them.
+
+**Requires the `harness` plugin.** `/harness:review-pr` and `harness:pr-reviewer` come from it. If
+they are not available in a session, do not substitute another review and do not merge: stop and
+ask the owner.
 
 ### Who merges
 
-Claude merges a PR (`gh pr merge <n> --squash --delete-branch`) once both hold on the PR's
-**final** commit, after doc updates:
+Owner decision, 2026-11-16; pass required since 2026-11-20. Claude merges a PR
+(`gh pr merge <n> --squash --delete-branch`) only when both hold on the PR's **final** commit,
+after doc updates:
 
-1. `/review-pr` reports no blockers, and
-2. CI is green.
+1. `/harness:review-pr` returns **pass** for that exact commit, and
+2. CI is green on that same commit.
 
-A fix for a blocker means CI and `/review-pr` run again. Afterwards tell the owner what each
-review found, how blockers and should-fixes were handled, and what was merged.
+A **fail** or **inconclusive** verdict never merges without the owner; "no blockers" is not
+enough. Inconclusive means a check did not run, the commit could not be confirmed or the diff was
+not fully read. Claude may fix the cause, push, let CI re-run and re-run `/harness:review-pr` on
+the new commit; only a pass on the final commit, with CI green, lets Claude merge. Otherwise stop
+and ask the owner. Afterwards tell the owner what each review found, how blockers and
+should-fixes were handled, and what was merged.
 
 **Always waits for the owner, whatever the review and CI say:**
 

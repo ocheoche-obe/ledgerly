@@ -131,3 +131,17 @@ Added only after reading the old file (things the code did not reveal):
    Today such a PR is docs-only and would qualify for auto-merge under "Who merges". I did not
    add a rule, since that is your decision.
 3. Whether to commit the headed-Playwright change in `.mcp.json` or keep it local.
+
+## Update, 2026-11-21: brought up to date with #66
+
+`main` was merged into this branch after #66 (switch to the shared `/harness:review-pr`). The notes
+above describe the file as written on 2026-11-16 and are left as they were; where they mention
+`/review-pr`, the `pr-reviewer` agent or a "blocker-free" review, the new file now says instead:
+
+- **Blind review after every PR** runs `/harness:review-pr` (`harness:pr-reviewer`, applying
+  `.claude/review-checklist.md` from the base branch) and returns a pass, fail or inconclusive
+  verdict bound to a commit. The old command and agent are deleted on `main`.
+- **Requires the `harness` plugin**: if the review is unavailable, stop and ask the owner. This
+  answers both should-fixes from #66's blind review.
+- **Who merges** requires a **pass** on the final commit plus green CI (owner decision,
+  2026-11-20). "No blockers" is no longer enough; fail or inconclusive waits for the owner.
