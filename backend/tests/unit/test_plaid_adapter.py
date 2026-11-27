@@ -7,6 +7,7 @@ content, and only Sandbox is reachable.
 from __future__ import annotations
 
 import importlib
+import itertools
 import json
 import sys
 import urllib.error
@@ -47,11 +48,48 @@ def body_of(request) -> dict:
     return json.loads(request.data)
 
 
-def test_only_sandbox_is_reachable():
+def test_only_sandbox_and_production_are_reachable():
     assert base_url("sandbox") == "https://sandbox.plaid.com"
-    for env in ("production", "development", "", "SANDBOX"):
+    assert base_url("production") == "https://production.plaid.com"
+    for env in ("development", "", "SANDBOX", "Production", "prod"):
         with pytest.raises(ValueError, match="sandbox"):
             PlaidClient(plaid_env=env, credentials=lambda: ("a", "b"))
+
+
+def test_new_links_ask_for_two_years_of_history_and_update_mode_does_not():
+    client, transport = make_client((200, {"link_token": "a"}), (200, {"link_token": "b"}))
+    client.link_token_create(client_user_id="sub-1")
+    client.link_token_create(client_user_id="sub-1", access_token=ACCESS_TOKEN)
+    new, update = (body_of(r) for r in transport.requests)
+    assert new["transactions"] == {"days_requested": 730}
+    assert "transactions" not in update
+
+
+def test_the_oauth_redirect_is_sent_only_when_configured():
+    client, transport = make_client((200, {"link_token": "a"}), (200, {"link_token": "b"}),
+                                    (200, {"link_token": "c"}))
+    client.link_token_create(client_user_id="sub-1")
+    client.link_token_create(client_user_id="sub-1", redirect_uri="https://site.example/oauth/plaid")
+    client.link_token_create(client_user_id="sub-1", access_token=ACCESS_TOKEN,
+                             redirect_uri="https://site.example/oauth/plaid")
+    plain, oauth, repair = (body_of(r) for r in transport.requests)
+    assert "redirect_uri" not in plain
+    assert oauth["redirect_uri"] == "https://site.example/oauth/plaid"
+    assert repair["redirect_uri"] == "https://site.example/oauth/plaid"
+
+
+@pytest.mark.parametrize("call", [
+    lambda c: c.sandbox_public_token_create(institution_id="ins_1", username="u", password="p"),
+    lambda c: c.sandbox_item_reset_login(access_token=ACCESS_TOKEN),
+    lambda c: c.transactions_refresh(access_token=ACCESS_TOKEN),
+])
+def test_sandbox_only_calls_are_refused_on_a_production_client(call):
+    transport = FakeTransport()
+    client = PlaidClient(plaid_env="production", credentials=lambda: (CLIENT_ID, SECRET),
+                         transport=transport, sleep=lambda _s: None)
+    with pytest.raises(ValueError, match="Sandbox-only"):
+        call(client)
+    assert transport.requests == []  # refused before any request was built
 
 
 def test_keys_travel_in_headers_and_never_in_the_body():
@@ -191,6 +229,7 @@ def test_sandbox_helpers_use_the_documented_shapes():
 
 KEYS_SECRET = "ledgerly/test/plaid/api-keys"
 TOKENS_SECRET = "ledgerly/test/plaid/access-tokens"
+LOCK_TABLE = "ledgerly-test-locks"
 
 
 @pytest.fixture
@@ -198,9 +237,20 @@ def secrets(monkeypatch):
     for name, value in (("AWS_DEFAULT_REGION", "us-east-1"), ("AWS_ACCESS_KEY_ID", "testing"),
                         ("AWS_SECRET_ACCESS_KEY", "testing"), ("AWS_SESSION_TOKEN", "testing"),
                         ("PLAID_KEYS_SECRET_ID", KEYS_SECRET),
-                        ("PLAID_TOKENS_SECRET_ID", TOKENS_SECRET)):
+                        ("PLAID_TOKENS_SECRET_ID", TOKENS_SECRET),
+                        ("TABLE_NAME", LOCK_TABLE)):
         monkeypatch.setenv(name, value)
     with mock_aws():
+        boto3.client("dynamodb", region_name="us-east-1").create_table(
+            TableName=LOCK_TABLE,
+            KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"},
+                       {"AttributeName": "sk", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"},
+                                  {"AttributeName": "sk", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        for name in ("adapters.locks", "adapters.secrets"):
+            sys.modules.pop(name, None)
         sm = boto3.client("secretsmanager", region_name="us-east-1")
         sm.create_secret(Name=TOKENS_SECRET, SecretString='{"items":{}}')
         sys.modules.pop("adapters.secrets", None)
@@ -281,3 +331,62 @@ def test_deleting_an_access_token_is_scoped_to_its_owner(secrets):
     assert module.get_access_token("sub-1", "item-1") is None
     assert module.get_access_token("sub-1", "item-2") == "other-token"
     assert module.delete_access_token("sub-1", "item-1") is False
+
+
+# --- the token-document lease (backlog B-11) ------------------------------------------------
+
+
+def test_token_writes_wait_for_a_held_lease_and_never_lose_a_change(secrets, monkeypatch):
+    """A writer that started first holds the lease; the second waits for it rather than
+    overwriting the document with a stale copy."""
+    module, sm = secrets
+    locks = module.locks
+    module.store_access_token("sub-1", "item-1", ACCESS_TOKEN)
+
+    # Someone else holds the lease. The second writer must wait; when the holder finishes
+    # (simulated by releasing on the waiter's first sleep), the waiter proceeds.
+    assert locks.try_acquire("plaid-access-tokens", "other", lease_seconds=20, now=1000.0)
+    real_held = locks.held
+
+    waited = []
+
+    def held_with_release(name, **kwargs):
+        def sleep(_s):
+            # While the other writer holds the lease, nothing has been written yet.
+            doc = json.loads(sm.get_secret_value(SecretId=TOKENS_SECRET)["SecretString"])
+            waited.append(set(doc["items"]))
+            locks.release("plaid-access-tokens", "other")
+        return real_held(name, sleep=sleep, clock=lambda: 1000.0, **kwargs)
+
+    monkeypatch.setattr(locks, "held", held_with_release)
+    module.store_access_token("sub-1", "item-2", "other-token")
+    assert waited == [{"item-1"}]
+    stored = json.loads(sm.get_secret_value(SecretId=TOKENS_SECRET)["SecretString"])
+    assert set(stored["items"]) == {"item-1", "item-2"}
+
+
+def test_a_lease_held_for_the_whole_wait_writes_nothing(secrets, monkeypatch):
+    module, sm = secrets
+    locks = module.locks
+    # Held by someone else for far longer than the writer will wait.
+    assert locks.try_acquire("plaid-access-tokens", "other", lease_seconds=600, now=1000.0)
+    ticks = itertools.count(1000)
+    real_held = locks.held
+    monkeypatch.setattr(locks, "held", lambda name, **kw: real_held(
+        name, sleep=lambda _s: None, clock=lambda: float(next(ticks)), **kw))
+    with pytest.raises(module.TokenStoreBusy):
+        module.store_access_token("sub-1", "item-1", ACCESS_TOKEN)
+    stored = json.loads(sm.get_secret_value(SecretId=TOKENS_SECRET)["SecretString"])
+    assert stored["items"] == {}
+
+
+def test_an_expired_lease_is_taken_over_and_only_its_holder_can_release(secrets):
+    module, _ = secrets
+    locks = module.locks
+    assert locks.try_acquire("x", "crashed", lease_seconds=20, now=1000.0)
+    assert not locks.try_acquire("x", "next", lease_seconds=20, now=1010.0)  # still live
+    assert locks.try_acquire("x", "next", lease_seconds=20, now=1021.0)      # expired
+    locks.release("x", "crashed")  # a stale holder cannot free someone else's lease
+    assert not locks.try_acquire("x", "third", lease_seconds=20, now=1022.0)
+    locks.release("x", "next")
+    assert locks.try_acquire("x", "third", lease_seconds=20, now=1022.0)

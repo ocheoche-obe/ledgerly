@@ -70,12 +70,14 @@ class FakePlaid:
         self.exchanged: list[str] = []
         self.refreshed: list[str] = []
         self.link_token_access: list[str | None] = []
+        self.link_token_redirects: list[str | None] = []
         self.removed_items: list[str] = []
         self.reset_logins: list[str] = []
         self.remove_error: PlaidError | None = None
 
-    def link_token_create(self, *, client_user_id, access_token=None):
+    def link_token_create(self, *, client_user_id, access_token=None, redirect_uri=None):
         self.link_token_access.append(access_token)
+        self.link_token_redirects.append(redirect_uri)
         return {"link_token": "link-sandbox-123", "expiration": "2026-11-15T12:00:00Z",
                 "request_id": "req-link"}
 
@@ -294,7 +296,7 @@ def test_a_repeated_exchange_keeps_the_existing_item_and_its_cursor(env):
 
 
 def test_plaid_errors_surface_as_502_with_the_code_and_request_id(env):
-    def fail(*, client_user_id, access_token=None):
+    def fail(*, client_user_id, access_token=None, redirect_uri=None):
         raise PlaidError(error_type="INVALID_INPUT", error_code="INVALID_API_KEYS",
                          request_id="req-9", status=400, endpoint="/link/token/create")
 
@@ -582,6 +584,37 @@ def test_sandbox_link_and_refresh_work_by_direct_invocation(env):
     refreshed = env.api.handler({"action": "sandbox_refresh", "sub": SUB, "itemId": ITEM_ID}, None)
     assert refreshed == {"ok": True, "plaidRequestId": "req-refresh"}
     assert env.plaid.refreshed == [ACCESS_TOKEN]
+
+
+def test_the_stage_oauth_redirect_reaches_link_token_create(env, monkeypatch):
+    env.api_call("/plaid/link-token")
+    monkeypatch.setenv("PLAID_REDIRECT_URI", "https://site.example/oauth/plaid")
+    env.api_call("/plaid/link-token")
+    assert env.plaid.link_token_redirects == [None, "https://site.example/oauth/plaid"]
+
+
+def test_a_busy_token_store_is_a_retryable_503_and_the_exchange_retries_once(env, monkeypatch):
+    secrets = sys.modules["functions.api_plaid.handler"]
+    calls = []
+
+    def busy_then_ok(sub, item_id, token):
+        calls.append(item_id)
+        if len(calls) == 1:
+            raise secrets.TokenStoreBusy("busy")
+
+    monkeypatch.setattr(env.api, "store_access_token", busy_then_ok)
+    status, _, _ = env.api_call("/plaid/exchange", {"publicToken": "public-sandbox-1"})
+    assert status == 201
+    assert calls == [ITEM_ID, ITEM_ID]
+
+    def always_busy(sub, item_id):
+        raise secrets.TokenStoreBusy("busy")
+
+    monkeypatch.setattr(env.api, "get_access_token", lambda sub, item_id: "access-sandbox-1")
+    monkeypatch.setattr(env.api, "delete_access_token", always_busy)
+    status, body, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE")
+    assert status == 503
+    assert "Try again" in body["message"]
 
 
 def test_sandbox_actions_are_refused_outside_sandbox_and_are_not_http_routes(env):

@@ -8,7 +8,7 @@ from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_cognito as cognito
 from constructs import Construct
 
-from ledgerly.config import OWNER_EMAIL, SANDBOX_TEST_EMAIL, StageConfig
+from ledgerly.config import OWNER_EMAIL, SANDBOX_TEST_EMAIL, StageConfig, cognito_domain_prefix
 
 
 class AuthConstruct(Construct):
@@ -32,8 +32,9 @@ class AuthConstruct(Construct):
                 require_digits=True,
                 require_symbols=True,
             ),
-            # TOTP available for the owner to enable; Slice 8 may make MFA required (hardening).
-            mfa=cognito.Mfa.OPTIONAL,
+            # Required (ADR-016): the app now holds live bank access tokens, so a password
+            # alone is not enough. TOTP only; the Hosted UI asks for setup at next sign-in.
+            mfa=cognito.Mfa.REQUIRED,
             mfa_second_factor=cognito.MfaSecondFactor(sms=False, otp=True),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
             removal_policy=RemovalPolicy.RETAIN if stage.retain_data else RemovalPolicy.DESTROY,
@@ -43,7 +44,7 @@ class AuthConstruct(Construct):
         self.domain = self.user_pool.add_domain(
             "HostedUiDomain",
             cognito_domain=cognito.CognitoDomainOptions(
-                domain_prefix=f"ledgerly-{stage.name}-816020558700"
+                domain_prefix=cognito_domain_prefix(stage.name)
             ),
         )
 
@@ -86,11 +87,10 @@ class AuthConstruct(Construct):
             ],
         )
 
-        # Plaid Sandbox test user, only on stages that talk to Plaid (dev). Sandbox Items are
-        # linked while logged in as this user, so fake bank data never lands in the owner's
-        # partition. The logical ID contains "Plaid" so check_prod_has_no_plaid.py also
-        # proves prod never gets it.
-        if stage.plaid_env is not None:
+        # Plaid Sandbox test user, only on the stage that talks to Plaid Sandbox (dev). Sandbox
+        # Items are linked while logged in as this user, so fake bank data never lands in the
+        # owner's partition. check_plaid_environments.py proves prod never gets it.
+        if stage.plaid_env == "sandbox":
             cognito.CfnUserPoolUser(
                 self,
                 "PlaidSandboxUser",

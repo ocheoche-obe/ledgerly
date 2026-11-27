@@ -1,7 +1,8 @@
-"""PlaidConstruct — Plaid Sandbox ingest (Slice 9, ADR-014). Instantiated for `dev` only.
+"""PlaidConstruct — Plaid bank ingest (Slice 9, ADR-014; prod added by ADR-016).
 
-Owns everything Plaid-specific so that a stage without Plaid (prod) synthesizes with none of
-it: three Lambdas and Ledgerly's first two runtime secrets.
+dev talks to Plaid Sandbox and prod to Plaid Production (`StageConfig.plaid_env`). Owns
+everything Plaid-specific, so a stage with no Plaid environment synthesizes with none of it:
+three Lambdas and Ledgerly's only two runtime secrets.
 
 - **`api_fn`** — `POST /plaid/link-token`, `/plaid/exchange`, `/plaid/sync` (routes are wired
   by `ApiConstruct`, behind the same JWT authorizer as everything else).
@@ -35,7 +36,7 @@ from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
 from ledgerly.backend_asset import backend_code
-from ledgerly.config import StageConfig
+from ledgerly.config import PLAID_OAUTH_REDIRECT_PATH, StageConfig
 
 _RETENTION = {
     30: logs.RetentionDays.ONE_MONTH,
@@ -61,6 +62,7 @@ class PlaidConstruct(Construct):
         stage: StageConfig,
         table: ddb.ITable,
         categorize_queue: sqs.IQueue,
+        site_url: str,
     ):
         super().__init__(scope, construct_id)
         if stage.plaid_env is None:
@@ -151,6 +153,9 @@ class PlaidConstruct(Construct):
             environment={
                 **common_env,
                 "PLAID_SYNC_FUNCTION_NAME": self.sync_fn.function_name,
+                # Only where the owner registered it with Plaid (see StageConfig).
+                **({"PLAID_REDIRECT_URI": f"{site_url}{PLAID_OAUTH_REDIRECT_PATH}"}
+                   if stage.plaid_oauth_redirect else {}),
             },
             log_group=self._log_group("ApiLogs", stage),
             tracing=_lambda.Tracing.ACTIVE,

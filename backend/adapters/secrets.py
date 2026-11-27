@@ -14,6 +14,10 @@ Two secrets, both in the stage's own namespace, each read by only the Lambdas th
 
       {"items": {"<item_id>": {"sub": "<owner sub>", "accessToken": "<token>"}}}
 
+  Every change is a read-modify-write of that one document, so writers hold a short
+  DynamoDB lease (``adapters.locks``) around it: without one, connecting a bank while
+  another is being disconnected could silently drop a token (backlog B-11, ADR-016).
+
 Nothing in this module logs, returns to a caller outside the backend, or raises a value read
 from either secret. Error messages name the *secret* and the *problem*, never the content.
 """
@@ -25,6 +29,8 @@ import os
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+
+from adapters import locks
 
 _client = boto3.client(
     "secretsmanager",
@@ -38,6 +44,14 @@ _credentials_cache: tuple[str, str] | None = None
 
 class SecretConfigError(RuntimeError):
     """A secret is missing, unreadable or not in the expected shape."""
+
+
+class TokenStoreBusy(RuntimeError):
+    """Another change to the access-token document held the lease for the whole wait.
+    Nothing was written; the caller can safely try again."""
+
+
+_TOKENS_LOCK = "plaid-access-tokens"
 
 
 def _read_json(env_var: str, what: str) -> dict:
@@ -94,27 +108,46 @@ def get_access_token(sub: str, item_id: str) -> str | None:
 
 
 def store_access_token(sub: str, item_id: str, access_token: str) -> None:
-    """Add (or replace) one Item's access token. Read-modify-write on the single document —
-    acceptable for a single-user app where linking a bank is a rare, serial action."""
-    document = _read_json("PLAID_TOKENS_SECRET_ID", "Plaid access tokens")
-    items = _items(document)
-    items[item_id] = {"sub": sub, "accessToken": access_token}
-    document["items"] = items
-    _write_tokens(document)
+    """Add (or replace) one Item's access token, under the token-document lease."""
+    with _tokens_lease():
+        document = _read_json("PLAID_TOKENS_SECRET_ID", "Plaid access tokens")
+        items = _items(document)
+        items[item_id] = {"sub": sub, "accessToken": access_token}
+        document["items"] = items
+        _write_tokens(document)
 
 
 def delete_access_token(sub: str, item_id: str) -> bool:
     """Forget one of this user's Items' access token (after ``/item/remove``). False if there
     was none for this user — an Item ID alone can never delete another user's token."""
-    document = _read_json("PLAID_TOKENS_SECRET_ID", "Plaid access tokens")
-    items = _items(document)
-    entry = items.get(item_id)
-    if not isinstance(entry, dict) or entry.get("sub") != sub:
-        return False
-    del items[item_id]
-    document["items"] = items
-    _write_tokens(document)
-    return True
+    with _tokens_lease():
+        document = _read_json("PLAID_TOKENS_SECRET_ID", "Plaid access tokens")
+        items = _items(document)
+        entry = items.get(item_id)
+        if not isinstance(entry, dict) or entry.get("sub") != sub:
+            return False
+        del items[item_id]
+        document["items"] = items
+        _write_tokens(document)
+        return True
+
+
+def _tokens_lease() -> _Lease:
+    return _Lease()
+
+
+class _Lease:
+    """``locks.held`` with its busy error translated into this module's own."""
+
+    def __enter__(self):
+        self._inner = locks.held(_TOKENS_LOCK)
+        try:
+            return self._inner.__enter__()
+        except locks.LockBusy:
+            raise TokenStoreBusy("the access-token store is busy; try again") from None
+
+    def __exit__(self, *exc):
+        return self._inner.__exit__(*exc)
 
 
 def _write_tokens(document: dict) -> None:

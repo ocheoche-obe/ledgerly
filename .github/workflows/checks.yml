@@ -68,6 +68,6 @@ jobs:
       - name: Synthesize (no AWS credentials needed — env is pinned in app.py)
         working-directory: infra
         run: cdk synth --all
-      - name: prod has no Plaid resources (ADR-014 - Plaid is dev/Sandbox only)
+      - name: each stage talks to its own Plaid environment (ADR-014, ADR-016)
         working-directory: infra
-        run: python check_prod_has_no_plaid.py
+        run: python check_plaid_environments.py

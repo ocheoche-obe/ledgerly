@@ -6,9 +6,11 @@ Plaid's published API reference when this was written (2026-11-15), not recalled
 
 Rules this module enforces, because they are the ones that are expensive to get wrong:
 
-- **Sandbox only.** The base URL comes from ``PLAID_ENV`` and the only accepted value is
-  ``sandbox``. Reaching Plaid Production is a separate decision (a follow-up ADR), so it is
-  not merely unconfigured here — it is refused.
+- **Known environments only.** The base URL comes from ``PLAID_ENV``: ``sandbox`` (dev) or
+  ``production`` (prod, ADR-016). Anything else is refused, not guessed. Which stage may use
+  which environment is pinned in infra (``check_plaid_environments.py``), not here.
+- **Sandbox helpers stay in Sandbox.** The ``/sandbox/*`` calls and ``/transactions/refresh``
+  (a billed add-on in Production) refuse to run on a Production client.
 - **Keys travel in headers** (``PLAID-CLIENT-ID`` / ``PLAID-SECRET``), never in a request
   body, so no body this module builds ever contains them.
 - **Nothing sensitive is logged or raised.** :class:`PlaidError` carries Plaid's
@@ -32,7 +34,15 @@ from core.plaid_sync import MUTATION_DURING_PAGINATION, PAGE_SIZE
 
 logger = logging.getLogger()
 
-_BASE_URLS = {"sandbox": "https://sandbox.plaid.com"}
+_BASE_URLS = {
+    "sandbox": "https://sandbox.plaid.com",
+    "production": "https://production.plaid.com",
+}
+
+# How much history a new connection asks for (ADR-016). Plaid's maximum; it is fixed when the
+# Item is created and cannot be raised later without removing the Item and linking again,
+# which on the Trial plan also spends one of its 10 Item slots.
+DAYS_REQUESTED = 730
 
 # Pins request/response shapes to the API version this code was written against.
 _PLAID_VERSION = "2020-09-14"
@@ -85,12 +95,12 @@ def is_mutation_during_pagination(err: Exception) -> bool:
 
 
 def base_url(plaid_env: str) -> str:
-    """The API host for an environment. Only ``sandbox`` is allowed in this slice."""
+    """The API host for an environment: ``sandbox`` or ``production`` (ADR-014, ADR-016)."""
     try:
         return _BASE_URLS[plaid_env]
     except KeyError:
         raise PlaidConfigError(
-            "PLAID_ENV must be 'sandbox' - no other Plaid environment is enabled (ADR-014)"
+            "PLAID_ENV must be 'sandbox' or 'production' (ADR-016)"
         ) from None
 
 
@@ -129,7 +139,8 @@ class PlaidClient:
 
     # --- Link ---------------------------------------------------------------------------
 
-    def link_token_create(self, *, client_user_id: str, access_token: str | None = None) -> dict:
+    def link_token_create(self, *, client_user_id: str, access_token: str | None = None,
+                          redirect_uri: str | None = None) -> dict:
         """``/link/token/create`` → ``{link_token, expiration, request_id}``.
 
         ``transactions`` is the only required product, so no institution is filtered out of
@@ -142,6 +153,14 @@ class PlaidClient:
         in update mode asks for additional consent instead of a repair. Link then returns no
         new public token, so nothing is exchanged afterwards and the access token is unchanged.
         An update-mode token lives 30 minutes rather than 4 hours.
+
+        **History** (new links only): ``transactions.days_requested`` is set to Plaid's maximum,
+        because it is fixed for the life of the Item.
+
+        **OAuth** (``redirect_uri`` given): banks such as Chase sign in on their own site. On
+        desktop Link opens that in a popup and needs no redirect; on a phone browser Plaid
+        returns to this URI, which must be registered in the Plaid Dashboard (an unregistered
+        URI makes this call fail). It is sent in both modes, since a repair can need OAuth too.
         """
         body: dict = {
             "client_name": "Ledgerly",
@@ -154,6 +173,9 @@ class PlaidClient:
         else:
             body["products"] = ["transactions"]
             body["additional_consented_products"] = ["identity"]
+            body["transactions"] = {"days_requested": DAYS_REQUESTED}
+        if redirect_uri:
+            body["redirect_uri"] = redirect_uri
         return self._post("/link/token/create", body)
 
     def item_remove(self, *, access_token: str) -> dict:
@@ -199,6 +221,7 @@ class PlaidClient:
     def sandbox_public_token_create(self, *, institution_id: str, username: str,
                                     password: str) -> dict:
         """``/sandbox/public_token/create`` — links a Sandbox test user without the Link UI."""
+        self._require_sandbox("/sandbox/public_token/create")
         return self._post("/sandbox/public_token/create", {
             "institution_id": institution_id,
             "initial_products": ["transactions"],
@@ -208,13 +231,19 @@ class PlaidClient:
     def sandbox_item_reset_login(self, *, access_token: str) -> dict:
         """``/sandbox/item/reset_login`` — puts a Sandbox Item into ``ITEM_LOGIN_REQUIRED`` so
         the reconnect (update mode) path can be exercised end to end."""
+        self._require_sandbox("/sandbox/item/reset_login")
         return self._post("/sandbox/item/reset_login", {"access_token": access_token})
 
     def transactions_refresh(self, *, access_token: str) -> dict:
         """``/transactions/refresh`` — in Sandbox, makes the dynamic test user generate new
         activity. In Production this is a separately billed add-on; nothing in Ledgerly's
-        owner-facing paths calls it."""
+        owner-facing paths calls it, and it is refused outside Sandbox."""
+        self._require_sandbox("/transactions/refresh")
         return self._post("/transactions/refresh", {"access_token": access_token})
+
+    def _require_sandbox(self, endpoint: str) -> None:
+        if self.plaid_env != "sandbox":
+            raise PlaidConfigError(f"{endpoint} is a Sandbox-only test call")
 
     # --- transport ----------------------------------------------------------------------
 

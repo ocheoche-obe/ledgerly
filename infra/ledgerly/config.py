@@ -59,9 +59,23 @@ class StageConfig:
     # CloudFormation stack termination protection.
     termination_protection: bool
     # Plaid environment this stage talks to, or None for no Plaid at all (ADR-014). None means
-    # the stage synthesizes with no Plaid routes, Lambdas, secrets or IAM. "sandbox" is the
-    # only value the backend accepts; Plaid Production needs its own ADR first.
+    # the stage synthesizes with no Plaid routes, Lambdas, secrets or IAM. dev is "sandbox"
+    # (fake banks) and prod is "production" (real banks, on Plaid's free trial: ADR-016).
+    # check_plaid_environments.py fails CI if either stage points anywhere else.
     plaid_env: str | None = None
+    # Send Plaid an OAuth redirect URI ({site}/oauth/plaid) when creating a Link token, so a
+    # bank's own sign-in page (Chase) can return to the app on a phone (ADR-016). Plaid
+    # refuses the token unless that exact URI is registered in its Dashboard, so it is on
+    # only where the owner has registered it.
+    plaid_oauth_redirect: bool = False
+
+
+def cognito_domain_prefix(stage_name: str) -> str:
+    """Hosted-UI domain prefix. Static, so the SPA's CSP can name it without a token cycle."""
+    return f"ledgerly-{stage_name}-{LEDGERLY_ACCOUNT}"
+
+
+PLAID_OAUTH_REDIRECT_PATH = "/oauth/plaid"
 
 
 STAGES: dict[str, StageConfig] = {
@@ -81,5 +95,7 @@ STAGES: dict[str, StageConfig] = {
         retain_data=True,           # the owner's real data — never auto-deleted
         log_retention_days=90,
         termination_protection=True,
+        plaid_env="production",     # real banks, Plaid free trial (ADR-016)
+        plaid_oauth_redirect=True,  # owner registers {site}/oauth/plaid in the Plaid Dashboard
     ),
 }
