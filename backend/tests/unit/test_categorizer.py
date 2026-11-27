@@ -75,13 +75,14 @@ class _Env:
                 "categoryId": cid, "name": name, "status": "active", "sortOrder": order,
             })
 
-    def seed_txn(self, txn_id, *, date, merchant, status="uncategorized"):
+    def seed_txn(self, txn_id, *, date, merchant, status="uncategorized", raw=None):
         item = {
             "type": "TXN", "txnId": txn_id, "date": date, "amountCents": -1000,
             "direction": "debit", "balanceCents": 5000, "accountId": "chase-5980",
             "descriptionRaw": merchant.upper(), "merchantNormalized": merchant,
             "categoryId": None, "categoryStatus": status, "needsReview": False,
             "importId": "01IMP",
+            **({"raw": raw} if raw is not None else {}),
         }
         self.dynamo._table.put_item(Item={
             "pk": f"USER#{SUB}", "sk": f"TXN#{date}#{txn_id}", **item,
@@ -261,3 +262,64 @@ def test_model_failure_reports_partial_batch_failure_and_leaves_txn_uncategorize
     assert out == {"batchItemFailures": [{"itemIdentifier": "m-boom"}]}
     item = cat.raw("t8", "2026-07-10")
     assert item["categoryStatus"] == "uncategorized"  # nothing lost
+
+
+# --- transfers between own accounts (ADR-017) --------------------------------------------
+
+def _pfc(detailed, confidence="VERY_HIGH", counterparties=None):
+    raw = {"personal_finance_category": {
+        "primary": detailed.split("_")[0], "detailed": detailed, "confidence_level": confidence}}
+    if counterparties is not None:
+        raw["counterparties"] = counterparties
+    return raw
+
+
+def test_a_card_payment_is_filed_to_transfers_without_the_model(cat):
+    cat.seed_txn("t1", date="2026-07-03", merchant="chase card",
+                 raw=_pfc("LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"))
+    model = FakeCategorizer({})
+    cat.inject(model)
+
+    assert cat.run([{"date": "2026-07-03", "txnId": "t1"}]) == {"batchItemFailures": []}
+
+    item = cat.raw("t1", "2026-07-03")
+    assert item["categoryId"] == "transfers"
+    assert item["categoryStatus"] == "auto"
+    assert item["needsReview"] is False
+    assert model.calls == 0
+    # The category was created on first use, as a transfer, and the model is never offered it.
+    category = cat.dynamo._table.get_item(
+        Key={"pk": f"USER#{SUB}", "sk": "CAT#transfers"})["Item"]
+    assert category["kind"] == "transfer" and category["name"] == "Transfers"
+    assert "transfers" not in {c["categoryId"] for c in cat.dynamo.list_category_choices(SUB)}
+
+
+@pytest.mark.parametrize("raw", [
+    _pfc("TRANSFER_OUT_ACCOUNT_TRANSFER", confidence="MEDIUM"),     # Plaid isn't sure
+    _pfc("TRANSFER_OUT_ACCOUNT_TRANSFER",
+         counterparties=[{"name": "Venmo", "type": "payment_app"}]),  # paying a person
+    _pfc("TRANSFER_OUT_WITHDRAWAL"),                                 # cash is spending
+    _pfc("LOAN_PAYMENTS_MORTGAGE_PAYMENT"),                          # a real bill
+    None,                                                            # a CSV row
+])
+def test_anything_short_of_a_confident_own_account_move_goes_to_the_model(cat, raw):
+    cat.seed_txn("t1", date="2026-07-03", merchant="something", raw=raw)
+    model = FakeCategorizer({"t1": (CAT_FOOD, 0.95)})
+    cat.inject(model)
+    cat.run([{"date": "2026-07-03", "txnId": "t1"}])
+    assert cat.raw("t1", "2026-07-03")["categoryId"] == CAT_FOOD
+    assert model.calls == 1
+
+
+def test_an_archived_transfers_category_stops_new_transfers(cat):
+    cat.dynamo.ensure_transfer_category(SUB)
+    cat.dynamo._table.update_item(
+        Key={"pk": f"USER#{SUB}", "sk": "CAT#transfers"},
+        UpdateExpression="SET #s = :a", ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":a": "archived"},
+    )
+    cat.seed_txn("t1", date="2026-07-03", merchant="savings",
+                 raw=_pfc("TRANSFER_OUT_SAVINGS", confidence="HIGH"))
+    cat.inject(FakeCategorizer({"t1": (CAT_RENT, 0.9)}))
+    cat.run([{"date": "2026-07-03", "txnId": "t1"}])
+    assert cat.raw("t1", "2026-07-03")["categoryId"] == CAT_RENT

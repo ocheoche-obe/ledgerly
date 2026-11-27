@@ -8,7 +8,9 @@ batch of locate keys ``{sub, txnKeys: [{date, txnId}]}``; per message:
      already-categorized batch is a cheap no-op — idempotency, NFR-3.2). A message carrying
      ``force`` (the recategorize endpoint's opt-in, Slice 6) also re-runs already-filed
      transactions — but never the owner's own ``confirmed``/``corrected`` ones.
-  3. **merchant rules first** — an exact ``RULE#<merchant>`` hit skips the LLM (free, FR-3.4).
+  3. **Plaid's own transfer label** — a move between the owner's own accounts (card payment,
+     savings) goes straight to the system Transfers category, no model call (ADR-017)
+  3b. **merchant rules** — an exact ``RULE#<merchant>`` hit skips the LLM (free, FR-3.4).
      Empty this slice (rules land in Slice 7), so everything falls through to:
   4. **the LLM** — one batched Bedrock call (Claude Opus 4.8) returns ``{categoryId?, confidence}``
      per txn; ``decide_llm`` applies the confidence threshold and validates the id
@@ -27,6 +29,7 @@ import os
 from adapters.bedrock import BedrockCategorizer
 from adapters.dynamo import (
     apply_categorization,
+    ensure_transfer_category,
     get_rule,
     get_transaction,
     list_category_choices,
@@ -36,9 +39,11 @@ from core.categorize import (
     SOURCE_RULE,
     decide_llm,
     decide_rule_hit,
+    decide_transfer,
 )
 from core.merchant_rules import rule_category
 from core.transactions import OWNER_SET_STATUSES, STATUS_UNCATEGORIZED
+from core.transfers import TRANSFER_CATEGORY_ID, is_own_account_move
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -95,13 +100,24 @@ def _process_message(body: str) -> None:
     valid_ids = {c["categoryId"] for c in categories}
     threshold = _threshold()
 
-    rule_hits = 0
+    rule_hits = transfers = 0
+    transfers_open: bool | None = None  # looked up (and created) on the first transfer only
     llm_txns: list[dict] = []           # transactions with no rule → go to the LLM (full items)
 
     for key in txn_keys:
         txn = get_transaction(sub, key["date"], key["txnId"])
         if txn is None or not _should_process(txn, force=force):
             continue
+
+        if is_own_account_move(txn):
+            if transfers_open is None:
+                transfers_open = ensure_transfer_category(sub)
+            if transfers_open:
+                apply_categorization(sub, txn["date"], txn["txnId"],
+                                     decide_transfer(TRANSFER_CATEGORY_ID))
+                transfers += 1
+                continue
+            # The owner archived Transfers: categorize it like any other row.
 
         category_id = rule_category(get_rule(sub, txn.get("merchantNormalized", "")))
         if category_id is not None:
@@ -128,5 +144,5 @@ def _process_message(body: str) -> None:
 
     logger.info(json.dumps({
         "stage": "categorizer", "sub_txns": len(txn_keys), "force": force,
-        "rule_hits": rule_hits, "llm_auto": llm_auto, "needs_review": needs_review,
+        "rule_hits": rule_hits, "transfers": transfers, "llm_auto": llm_auto, "needs_review": needs_review,
     }))

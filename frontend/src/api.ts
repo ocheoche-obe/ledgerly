@@ -117,6 +117,8 @@ export interface CycleTotals {
   pendingCount?: number;
   /** Loan-account transactions in this window that none of the figures include. */
   excludedCount?: number;
+  // Moves between the owner's own accounts (Transfers, ADR-017), left out of every figure.
+  transferCount?: number;
   truncated?: boolean;
 }
 

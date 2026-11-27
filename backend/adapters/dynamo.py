@@ -45,6 +45,12 @@ from core.transactions import (
     txn_sk,
     txn_view,
 )
+from core.transfers import (
+    KIND_SPEND,
+    KIND_TRANSFER,
+    TRANSFER_CATEGORY_ID,
+    transfer_category_item,
+)
 
 _TABLE_NAME = os.environ["TABLE_NAME"]
 _dynamodb = boto3.resource(
@@ -392,14 +398,32 @@ def list_category_choices(sub: str) -> list[dict]:
     """
     items = _table.query(
         KeyConditionExpression=Key("pk").eq(_pk(sub)) & Key("sk").begins_with("CAT#"),
-        ProjectionExpression="categoryId, #n, #s",
-        ExpressionAttributeNames={"#n": "name", "#s": "status"},
+        ProjectionExpression="categoryId, #n, #s, #k",
+        ExpressionAttributeNames={"#n": "name", "#s": "status", "#k": "kind"},
     ).get("Items", [])
     return [
         {"categoryId": i["categoryId"], "name": i["name"]}
         for i in items
         if i.get("status", STATUS_ACTIVE) == STATUS_ACTIVE
+        # The model never files into Transfers: only Plaid's own label does (ADR-017).
+        and i.get("kind", KIND_SPEND) != KIND_TRANSFER
     ]
+
+
+def ensure_transfer_category(sub: str) -> bool:
+    """Create the system Transfers category if it is missing (ADR-017). True if it can be
+    filed into now; False if the owner archived it, which stops new rows going there."""
+    key = {"pk": _pk(sub), "sk": _cat_sk(TRANSFER_CATEGORY_ID)}
+    try:
+        _table.put_item(Item={**key, **transfer_category_item()},
+                        ConditionExpression="attribute_not_exists(sk)")
+        return True
+    except ClientError as err:
+        if err.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+    existing = _table.get_item(Key=key, ProjectionExpression="#s",
+                               ExpressionAttributeNames={"#s": "status"}).get("Item", {})
+    return existing.get("status", STATUS_ACTIVE) == STATUS_ACTIVE
 
 
 def get_rule(sub: str, normalized_merchant: str) -> dict | None:

@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 1.4
+**Version:** 1.6
 **Created:** 2026-07-12
 
 ---
@@ -746,3 +746,4 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
 | 1.1 | 2026-07-21 | Slice 5 🔨 code-complete: async AI categorization (SQS+DLQ → categorizer → Bedrock Claude Opus 4.8) + eval harness, FR-3.1–3.3/3.5. `core/categorize/` decision matrix + `merchant_rules` + `bedrock`/`sqs` adapters + `CategorizationConstruct`; 164 backend/13 frontend tests. Threshold 0.8 (owner-approved); harness A/Bs Opus 4.8 vs Sonnet 5 (owner-agreed, 2026-07-21). ADR-008 impl notes added (boto3 not `anthropic` SDK; Opus 4.8 is INFERENCE_PROFILE-only → `us.anthropic.…` id + profile/FM IAM grant). Deploy + live smoke + eval baseline via pipeline on merge (Option A) — those exit criteria stay open until then; owner's labeled sample still needed for the baseline number |
 | 1.4 | 2026-11-16 | Slice 9 ✅ complete (#61 backend, #62 bank connections UI). Verified live on dev through the real UI as a dev-only Sandbox user; Plaid acceptance PASS. ADR-015 (loan accounts out of spend; Sandbox data under its own user); 701 Sandbox items purged from the owner's partition with the owner's approval. Merge cadence changed by the owner: a clean blind `/review-pr` + green CI merges without waiting (CLAUDE.md "Who merges"). Backlog [B-10] (dispatchable dev deploy), [B-11] (deferred review findings) |
 | 1.5 | 2026-11-26 | Slice 10 🔨 started: Plaid Production on prod on the free trial (ADR-016, Proposed): per-stage Plaid environment check, OAuth return page, 730 days of history, MFA required, CSP, [B-11] token race fixed. Transfer category follows in its own PR. |
+| 1.6 | 2026-11-26 | Slice 10: Transfer category from Plaid's own `personal_finance_category` label (ADR-017, Proposed); transfers left out of the dashboard. |

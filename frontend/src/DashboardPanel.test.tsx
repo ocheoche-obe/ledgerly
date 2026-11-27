@@ -147,4 +147,19 @@ describe("DashboardPanel", () => {
     );
     expect(await screen.findByText(/35 loan-account transactions aren't counted here/)).toBeTruthy();
   });
+
+  it("says when transfers between own accounts are left out of the figures", async () => {
+    const withTransfers: CycleSummary = {
+      ...SUMMARY,
+      totals: { ...SUMMARY.totals, transferCount: 1 },
+    };
+    render(
+      <DashboardPanel
+        api={fakeApi({ getCycleSummary: vi.fn().mockResolvedValue(withTransfers) })}
+        onError={vi.fn()}
+        reloadKey={0}
+      />,
+    );
+    expect(await screen.findByText(/1 transfer isn't counted here/)).toBeTruthy();
+  });
 });

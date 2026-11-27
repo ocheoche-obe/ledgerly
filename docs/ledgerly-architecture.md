@@ -1,6 +1,6 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.8
+**Version:** 1.10
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
 **Last updated:** 2026-11-16
 
@@ -249,7 +249,7 @@ User (Cognito sub) 1 ──── 1 Settings
 | Entity | `sk` | Notes |
 |---|---|---|
 | Settings | `PROFILE` | cadence config incl. `effectiveFrom` history |
-| Category | `CAT#<ulid>` | `name`, `status: active\|archived`, `sortOrder` |
+| Category | `CAT#<ulid>` (system Transfers: `CAT#transfers`) | `name`, `status: active\|archived`, `sortOrder`, `kind: spend\|transfer` (absent = spend; ADR-017) |
 | Budget | `BUDGET#<cycleId>#<categoryId>` | `amountCents`; cycle-major so one Query gets a whole cycle |
 | Transaction | `TXN#<date>#<txnId>` | date `YYYY-MM-DD`; `txnId = sha256(accountId·date·amountCents·rawDescription·balanceCents)[:16]` → dedupe is key-equality (balance included per ADR-012 so legit same-day/-amount/-merchant charges aren't collapsed) |
 | Import | `IMPORT#<isoTimestamp>#<ulid>` | counts added/duplicate/failed, status, filename, `accountLabel` (owner-confirmed at upload, ADR-013) |
@@ -631,3 +631,4 @@ resolves it.)*
 | 1.7 | 2026-11-15 | Slice-9 Plaid Sandbox ingest **backend implemented** per ADR-014 (`dev` only; `prod` synthesizes with no Plaid resources). §0/§4.3: "no runtime secrets" replaced — two Secrets Manager secrets for Plaid (owner-created API keys, stack-created access tokens). New `PlaidConstruct` (`api_plaid` + async `plaid_sync` worker), routes `POST /plaid/link-token` / `/plaid/exchange` / `/plaid/sync`, items `PLAIDITEM#<itemId>` and pointer `PLAIDTXN#<transaction_id>`; Plaid rows are ordinary `TXN#` items (`txnId` = Plaid's `transaction_id`, `pending` flag, no `balanceCents`). Diagram re-rendered (Plaid + Secrets Manager; Bedrock label corrected to Sonnet 4.6). §1.2/§1.3/§2.4/§2.5 prose still to be brought current at slice wrap. |
 | 1.8 | 2026-11-16 | Slice 9 complete: §1.2/§1.3/§2.4/§2.5 brought current for Plaid (Sandbox, `dev` only). New routes `GET /plaid/items`, `DELETE /plaid/items/{itemId}` and update-mode `POST /plaid/link-token {itemId}` (owner-confirmed paths); `PLAIDITEM#`/`PLAIDTXN#` items documented; `accountType` on Plaid rows with `loan` rows excluded from the dashboard (ADR-015); Sandbox data under a separate dev-only Cognito user (ADR-015). §1.2 Bedrock model corrected to Sonnet 4.6. No system-shape change, so no diagram re-render. |
 | 1.9 | 2026-11-26 | Slice 10 (ADR-016, Proposed): prod on Plaid Production, dev stays on Sandbox; OAuth return at `/oauth/plaid`; `LOCK#plaid-access-tokens` lease item outside every user partition; MFA required; CloudFront CSP + security headers. Diagram re-rendered (Plaid label). |
+| 1.10 | 2026-11-26 | Slice 10 (ADR-017, Proposed): category items gain `kind` (`spend` default, `transfer` for the system Transfers category, id `transfers`); the categorizer files Plaid-labelled own-account moves there before rules and the model; the cycle summary leaves transfers out and reports `totals.transferCount`. No system-shape change, so no diagram re-render. |

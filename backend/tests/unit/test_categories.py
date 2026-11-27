@@ -89,6 +89,7 @@ def test_category_view_drops_key_attributes():
     }
     assert category_view(item) == {
         "categoryId": "01J", "name": "Coffee", "status": "active", "sortOrder": 2,
+        "kind": "spend",
     }
 
 

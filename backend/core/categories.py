@@ -83,4 +83,6 @@ def category_view(item: dict) -> dict:
         "status": item.get("status", STATUS_ACTIVE),
         # Coerce to int: DynamoDB returns numbers as Decimal, which won't JSON-serialize.
         "sortOrder": int(item.get("sortOrder", 0)),
+        # "transfer" only for the system Transfers category (core.transfers); left out of spend.
+        "kind": item.get("kind", "spend"),
     }

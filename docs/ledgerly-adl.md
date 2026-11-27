@@ -61,6 +61,7 @@ Superseded.
 | ADR-014 | Plaid becomes the primary ingest source (Sandbox only for now) | Accepted |
 | ADR-015 | Loan accounts stay out of spend; Plaid Sandbox data lives under its own user | Accepted |
 | ADR-016 | Plaid Production on prod, on Plaid's free trial | **Proposed** (awaiting owner) |
+| ADR-017 | Transfers between own accounts, from Plaid's own label | **Proposed** (awaiting owner) |
 
 ---
 
@@ -1009,3 +1010,50 @@ stage with retained data, deletion protection and a manual deploy gate.
 ---
 
 <!-- Copy the ADR block above for each new decision. Keep them append-only. -->
+
+
+## ADR-017: Transfers between own accounts, from Plaid's own label
+
+**Status:** Proposed (2026-11-26, Slice 10). Becomes Accepted on the owner's word.
+
+### Context
+
+Paying a credit card from checking, or moving money to savings, is not spending, but it lands
+in Ledgerly as two ordinary transactions and both were counted in the dashboard (backlog [B-11],
+deferred to Slice 7 by ADR-015). With real accounts on Plaid Production (ADR-016) that would
+double-count every card bill. Plaid already labels each transaction with
+`personal_finance_category` (`primary`, `detailed`, `confidence_level`), and the sync worker
+keeps that in the row's `raw` copy.
+
+### Decision
+
+1. **A system Transfers category**, id `transfers`, `kind: "transfer"`, created per user the first
+   time one of their rows needs it (a conditional put, so it is never duplicated). It is a normal
+   category the owner can rename or archive. Archived means "stop filing there": new rows go
+   through the usual rules and model instead.
+2. **Only Plaid's own label files a row there**, before merchant rules and the model, with no
+   model call: `detailed` is one of `TRANSFER_IN/OUT_ACCOUNT_TRANSFER`,
+   `TRANSFER_IN/OUT_SAVINGS` or `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`, **and** `confidence_level`
+   is `HIGH` or `VERY_HIGH`, **and** no counterparty is a `payment_app` (Venmo, Zelle and the
+   like are often a person, so they stay with the model). The model is never offered Transfers,
+   so it cannot file a guess there.
+3. **The dashboard leaves Transfers out**: no row, no budget (the API refuses one), not in the
+   totals; it shows only how many transfers were set aside, so nothing vanishes silently.
+4. **CSV rows are unchanged**: they carry no Plaid label, and the owner's real data is moving to
+   Plaid. Investment contributions keep the existing "Savings & Investments" category.
+
+### Alternatives considered
+
+- **Let the model choose Transfers.** Rejected: a wrong guess hides real spending from every
+  total, and Plaid's label is free and better informed (it sees both sides).
+- **Match the two legs of a transfer ourselves** (same amount, opposite sign, close dates).
+  Deferred: needs both accounts linked and a matching window; Plaid's label already covers the
+  common cases.
+- **Include person-to-person apps.** Rejected for now: paying a friend back for dinner is spending.
+
+### Consequences
+
+- Card payments and savings moves stop inflating spend on Plaid-linked accounts.
+- A row Plaid labels wrongly, or at `MEDIUM` confidence, is still categorized by the model, and
+  the owner can correct it once the review queue lands (Slice 7).
+- Revisit if Plaid changes its taxonomy, or if CSV accounts come back into regular use.

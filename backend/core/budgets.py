@@ -22,6 +22,7 @@ negative spend — the UI renders those as income rather than as a budget bar.
 from __future__ import annotations
 
 from core.plaid_items import excluded_from_spend
+from core.transfers import transfer_category_ids
 
 # A budget amount is a non-negative whole number of cents. The ceiling is a sanity guard
 # against a fat-fingered entry (a $10M monthly grocery budget is a typo, not a plan).
@@ -99,8 +100,15 @@ def summarize(
     Transactions on loan accounts (``core.plaid_items.excluded_from_spend``) are left out of every figure, rows
     and totals alike; ``totals.excludedCount`` says how many were, so the screen can say so
     rather than let the numbers quietly disagree with the transaction list.
+
+    Transactions filed under a ``kind = "transfer"`` category (moves between the owner's own
+    accounts, ADR-017) are left out the same way and counted in ``totals.transferCount``. The
+    Transfers category gets no row, so it can carry no budget.
     """
-    budget_by_cat = {b["categoryId"]: int(b["amountCents"]) for b in budgets}
+    transfer_ids = transfer_category_ids(categories)
+    categories = [c for c in categories if c["categoryId"] not in transfer_ids]
+    budget_by_cat = {b["categoryId"]: int(b["amountCents"]) for b in budgets
+                     if b["categoryId"] not in transfer_ids}
 
     net_by_cat: dict[str | None, int] = {}
     count_by_cat: dict[str | None, int] = {}
@@ -110,11 +118,14 @@ def summarize(
     pending_net_by_cat: dict[str | None, int] = {}
     pending_count = 0
     money_in = money_out = 0
-    excluded_count = 0
+    excluded_count = transfer_count = 0
     counted = 0
     for txn in transactions:
         if excluded_from_spend(txn):
             excluded_count += 1
+            continue
+        if txn.get("categoryId") in transfer_ids:
+            transfer_count += 1
             continue
         counted += 1
         amount = int(txn["amountCents"])
@@ -179,6 +190,8 @@ def summarize(
             "pendingCount": pending_count,
             # Loan-account rows in this window that none of the figures above include.
             "excludedCount": excluded_count,
+            # Moves between the owner's own accounts (Transfers), likewise not in any figure.
+            "transferCount": transfer_count,
         },
     }
 
