@@ -978,7 +978,9 @@ stage with retained data, deletion protection and a manual deploy gate.
 7. **The access-token write race ([B-11]) is fixed** with a short DynamoDB lease
    (`adapters/locks.py`) around each read-modify-write of the tokens secret, since Secrets
    Manager has no compare-and-swap. A writer that waits more than 6 seconds gets a retryable 503;
-   a crashed holder's lease expires after 20.
+   a crashed holder's lease expires after 20. A bank link waits twice, because its public token
+   is already spent; if both waits fail it removes the new Item at Plaid rather than leave a
+   live connection with no stored token (the slot is still used, per point 2).
 
 ### Alternatives considered
 
