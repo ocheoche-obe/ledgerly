@@ -9,6 +9,7 @@ import dataclasses
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -101,13 +102,17 @@ def _directives(policy: str) -> dict[str, list[str]]:
     return {d.split()[0]: d.split()[1:] for d in policy.split("; ")}
 
 
+def _plaid_api_hosts(sources: list[str]) -> set[str]:
+    """Hostnames in a CSP source list that are Plaid API environments (not the Link CDN)."""
+    hosts = {urlparse(v).hostname for v in sources if v.startswith("https://")}
+    return {h for h in hosts if h in {"sandbox.plaid.com", "production.plaid.com"}}
+
+
 def test_each_stage_csp_names_only_its_own_plaid_host():
     dev = _directives(content_security_policy(STAGES["dev"]))
     prod = _directives(content_security_policy(STAGES["prod"]))
-    assert "https://sandbox.plaid.com/" in dev["connect-src"]
-    assert "https://production.plaid.com/" in prod["connect-src"]
-    assert not any("production.plaid.com" in v for v in dev["connect-src"])
-    assert not any("sandbox.plaid.com" in v for v in prod["connect-src"])
+    assert _plaid_api_hosts(dev["connect-src"]) == {"sandbox.plaid.com"}
+    assert _plaid_api_hosts(prod["connect-src"]) == {"production.plaid.com"}
     assert prod["frame-src"] == ["https://cdn.plaid.com/"]
     assert prod["frame-ancestors"] == ["'none'"] and prod["object-src"] == ["'none'"]
 
