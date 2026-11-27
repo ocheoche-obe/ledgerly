@@ -389,3 +389,12 @@ def test_an_expired_lease_is_taken_over_and_only_its_holder_can_release(secrets)
     assert not locks.try_acquire("x", "third", lease_seconds=20, now=1022.0)
     locks.release("x", "next")
     assert locks.try_acquire("x", "third", lease_seconds=20, now=1022.0)
+
+
+def test_a_retried_acquire_recognises_its_own_lease(secrets):
+    """A PutItem retried after a lost response must not mistake its own lease for another's."""
+    module, _ = secrets
+    locks = module.locks
+    assert locks.try_acquire("y", "me", lease_seconds=20, now=1000.0)
+    assert locks.try_acquire("y", "me", lease_seconds=20, now=1001.0)      # same owner: ours
+    assert not locks.try_acquire("y", "other", lease_seconds=20, now=1002.0)

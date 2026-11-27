@@ -2,7 +2,7 @@
 
 **Version:** 1.10
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
-**Last updated:** 2026-11-16
+**Last updated:** 2026-11-26
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
 > significant choice recorded here has a matching ADR in `ledgerly-adl.md`

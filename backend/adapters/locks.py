@@ -47,8 +47,11 @@ def try_acquire(name: str, owner: str, *, lease_seconds: int, now: float) -> boo
             TableName=os.environ["TABLE_NAME"],
             Item={**_key(name), "owner": {"S": owner},
                   "expiresAt": {"N": str(int(now) + lease_seconds)}},
-            ConditionExpression="attribute_not_exists(pk) OR expiresAt < :now",
-            ExpressionAttributeValues={":now": {"N": str(int(now))}},
+            # `#o = :owner` lets a retried PutItem (first attempt applied, response lost)
+            # recognise its own lease instead of waiting it out.
+            ConditionExpression="attribute_not_exists(pk) OR expiresAt < :now OR #o = :owner",
+            ExpressionAttributeNames={"#o": "owner"},
+            ExpressionAttributeValues={":now": {"N": str(int(now))}, ":owner": {"S": owner}},
         )
         return True
     except ClientError as err:

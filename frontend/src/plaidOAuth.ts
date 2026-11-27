@@ -41,25 +41,37 @@ export function oauthReturn(
   location: Location = window.location,
   now = Date.now(),
 ): OAuthReturn | null {
-  if (location.pathname !== OAUTH_RETURN_PATH) return null;
-  if (!new URLSearchParams(location.search).get("oauth_state_id")) return null;
+  if (location.pathname !== OAUTH_RETURN_PATH ||
+      !new URLSearchParams(location.search).get("oauth_state_id")) {
+    // Not a bank return, so nothing saved is wanted: a session left by a closed tab goes.
+    forgetLinkSession();
+    return null;
+  }
   let saved: unknown;
   try {
     saved = JSON.parse(localStorage.getItem(KEY) ?? "null");
   } catch {
+    saved = null;
+  }
+  if (!isSaved(saved) || now - saved.savedAt > MAX_AGE_MS || saved.savedAt > now) {
+    forgetLinkSession();
     return null;
   }
-  if (!isSaved(saved) || now - saved.savedAt > MAX_AGE_MS || saved.savedAt > now) return null;
   return { token: saved.token, mode: saved.mode, receivedRedirectUri: location.href };
 }
 
-/** Forget the session and put the address bar back on the app's root. */
-export function finishOAuthReturn(): void {
+/** Drop any saved Link session (stale, invalid or finished). */
+export function forgetLinkSession(): void {
   try {
     localStorage.removeItem(KEY);
   } catch {
     // nothing to clean up
   }
+}
+
+/** Forget the session and put the address bar back on the app's root. */
+export function finishOAuthReturn(): void {
+  forgetLinkSession();
   if (window.location.pathname === OAUTH_RETURN_PATH) {
     window.history.replaceState({}, document.title, "/");
   }
