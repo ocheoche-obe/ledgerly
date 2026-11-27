@@ -71,3 +71,6 @@ jobs:
       - name: each stage talks to its own Plaid environment (ADR-014, ADR-016)
         working-directory: infra
         run: python check_plaid_environments.py
+      - name: tests for that check and the SPA's CSP
+        working-directory: infra
+        run: pip install "pytest>=9.2.0,<9.3" && python -m pytest -q tests

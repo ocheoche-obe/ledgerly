@@ -610,6 +610,17 @@ def test_a_busy_token_store_is_a_retryable_503_and_the_exchange_retries_once(env
     def always_busy(sub, item_id):
         raise secrets.TokenStoreBusy("busy")
 
+    # Busy on the retry too: the spent token's Item is removed at Plaid, not left orphaned.
+    calls.clear()
+    monkeypatch.setattr(env.api, "store_access_token",
+                        lambda sub, item_id, token: (_ for _ in ()).throw(
+                            secrets.TokenStoreBusy("busy")))
+    removed_before = list(env.plaid.removed_items)
+    status, body, _ = env.api_call("/plaid/exchange", {"publicToken": "public-sandbox-2"})
+    assert status == 503
+    assert "Try again" in body["message"]
+    assert env.plaid.removed_items == [*removed_before, ACCESS_TOKEN]
+
     monkeypatch.setattr(env.api, "get_access_token", lambda sub, item_id: "access-sandbox-1")
     monkeypatch.setattr(env.api, "delete_access_token", always_busy)
     status, body, _ = env.api_call(f"/plaid/items/{ITEM_ID}", method="DELETE")

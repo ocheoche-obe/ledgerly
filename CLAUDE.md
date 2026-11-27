@@ -298,6 +298,9 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
+**Slice 10 — Plaid Production on prod (free trial, ADR-016 Proposed): 🔨 IN PROGRESS (2026-11-26).**
+PR open; accepting ADR-016, the prod key, the Plaid redirect URI and the prod deploy are the owner's.
+
 **Slice 9 — Plaid Sandbox ingest: ✅ COMPLETE (2026-11-16)** — #61 (backend) + #62 (Bank
 connections UI). Verified live on `dev` through the real UI (Playwright) as the **dev-only Cognito
 Sandbox user** (`…+sandbox@gmail.com`, `PlaidSandboxUser`); Plaid build-kit acceptance PASS

@@ -239,6 +239,17 @@ def _exchange(sub: str, body: dict) -> dict:
     return _response(201, result)
 
 
+def _remove_unstored_item(client, sub: str, item_id: str, access_token: str) -> None:
+    """Best-effort ``/item/remove`` for an Item whose access token could not be stored."""
+    try:
+        client.item_remove(access_token=access_token)
+        outcome = "unstored_item_removed"
+    except Exception:  # noqa: BLE001 - best effort on a path that is already failing
+        outcome = "unstored_item_remove_failed"
+    logger.error(json.dumps({"route": "POST /plaid/exchange", "sub": sub,
+                             "itemId": item_id, "outcome": outcome}))
+
+
 def _link(sub: str, *, public_token: str, institution_id: str, institution_name: str,
           link_session_id: str) -> dict:
     """Exchange a public token, persist the result, and start the first sync.
@@ -264,7 +275,14 @@ def _link(sub: str, *, public_token: str, institution_id: str, institution_name:
         # lightly: wait once more for the lease (still inside the Lambda's timeout).
         logger.warning(json.dumps({"route": "POST /plaid/exchange", "sub": sub,
                                    "itemId": item_id, "outcome": "token_store_busy_retry"}))
-        store_access_token(sub, item_id, access_token)
+        try:
+            store_access_token(sub, item_id, access_token)
+        except TokenStoreBusy:
+            # Still busy (a crashed earlier writer can hold the lease for its full 20 s). The
+            # token exists only in memory now, so remove the Item at Plaid rather than leave a
+            # live connection nobody can reach or disconnect. Connecting again then starts clean.
+            _remove_unstored_item(client, sub, item_id, access_token)
+            raise
 
     record = new_plaid_item(
         item_id,

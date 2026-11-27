@@ -253,7 +253,6 @@ def secrets(monkeypatch):
             sys.modules.pop(name, None)
         sm = boto3.client("secretsmanager", region_name="us-east-1")
         sm.create_secret(Name=TOKENS_SECRET, SecretString='{"items":{}}')
-        sys.modules.pop("adapters.secrets", None)
         module = importlib.import_module("adapters.secrets")
         yield module, sm
 
