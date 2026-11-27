@@ -94,7 +94,7 @@ with Diagram(
 ):
     owner = User("Owner\n(browser)")
     # The only non-AWS service Ledgerly calls (ADR-014). Outside the AWS boundary on purpose.
-    plaid = Internet("Plaid API\n(Sandbox)")
+    plaid = Internet("Plaid API\n(dev: Sandbox · prod: Production)")
 
     with Cluster("AWS Cloud — us-east-1 (per stage: dev / prod)", graph_attr=AWS_CLOUD_ATTR):
 
@@ -114,7 +114,7 @@ with Diagram(
         with Cluster("Application Compute (Python 3.13)", graph_attr=LAYER_ATTR):
             api_l = Lambda("API Lambdas\nsettings · categories · budgets\ntransactions · dashboard · imports")
 
-        with Cluster("Ingest (pluggable source: CSV · Plaid Sandbox, dev only)", graph_attr=LAYER_ATTR):
+        with Cluster("Ingest (pluggable source: CSV · Plaid)", graph_attr=LAYER_ATTR):
             s3_up = S3("S3: CSV uploads\n(30-day expiry)")
             import_l = Lambda("import_handler\nparse · dedupe · summary")
             # Slice 9 / ADR-014 — the second producer behind the same seam, plus the only
@@ -154,7 +154,7 @@ with Diagram(
     cat_l >> bedrock
     cat_l >> ddb
 
-    # --- Plaid ingest (dev only): same downstream as CSV, plus the one non-AWS egress -----
+    # --- Plaid ingest: same downstream as CSV, plus the one non-AWS egress -----
     apigw >> plaid_l
     plaid_l >> ddb
     plaid_l >> queue

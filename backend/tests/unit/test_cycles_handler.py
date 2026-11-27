@@ -158,6 +158,18 @@ def test_budget_for_unknown_category_is_rejected(cycles):
     assert "unknown categoryId" in _body(res)["message"]
 
 
+def test_transfers_cannot_carry_a_budget(cycles):
+    _categories(cycles)
+    importlib.import_module("adapters.dynamo").ensure_transfer_category(SUB)
+    res = cycles.handler(
+        _event("PUT", path_params={"cycleRef": "current", "categoryId": "transfers"},
+               body={"amountCents": 100}),
+        None,
+    )
+    assert res["statusCode"] == 400
+    assert "aren't spending" in _body(res)["message"]
+
+
 def test_budget_rejects_a_negative_amount(cycles):
     groceries = next(c for c in _categories(cycles) if c["name"] == "Groceries")
     res = cycles.handler(

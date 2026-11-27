@@ -1,8 +1,8 @@
 # Ledgerly — Architecture Document
 
-**Version:** 1.8
+**Version:** 1.10
 **Status:** Approved (owner review 2026-07-13; rendered diagram added per review feedback)
-**Last updated:** 2026-11-16
+**Last updated:** 2026-11-26
 
 > Owns **HOW** (system design) and **WHERE** (§0.1 deployment target & environment). Every
 > significant choice recorded here has a matching ADR in `ledgerly-adl.md`
@@ -145,7 +145,7 @@ diagram above is authoritative if they ever disagree):
   protection on in `prod`.
 - **Ingest** — CSV upload via **presigned S3 URL** (the API hands the browser a URL; the
   file never transits Lambda), S3 event triggers the import Lambda. This is the pluggable
-  seam FR-2.3 requires, and Plaid now uses it (ADR-014, `dev` + Sandbox only): the
+  seam FR-2.3 requires, and Plaid now uses it (ADR-014; dev on Sandbox, prod on Production, ADR-016): the
   `api_plaid` Lambda links a bank and starts a sync; the async `plaid_sync` worker pulls
   `/transactions/sync` and writes ordinary `TXN#` rows plus categorization jobs — everything
   downstream is unchanged. Two downstream additions only: pending rows are flagged and shown,
@@ -249,7 +249,7 @@ User (Cognito sub) 1 ──── 1 Settings
 | Entity | `sk` | Notes |
 |---|---|---|
 | Settings | `PROFILE` | cadence config incl. `effectiveFrom` history |
-| Category | `CAT#<ulid>` | `name`, `status: active\|archived`, `sortOrder` |
+| Category | `CAT#<ulid>` (system Transfers: `CAT#transfers`) | `name`, `status: active\|archived`, `sortOrder`, `kind: spend\|transfer` (absent = spend; ADR-017) |
 | Budget | `BUDGET#<cycleId>#<categoryId>` | `amountCents`; cycle-major so one Query gets a whole cycle |
 | Transaction | `TXN#<date>#<txnId>` | date `YYYY-MM-DD`; `txnId = sha256(accountId·date·amountCents·rawDescription·balanceCents)[:16]` → dedupe is key-equality (balance included per ADR-012 so legit same-day/-amount/-merchant charges aren't collapsed) |
 | Import | `IMPORT#<isoTimestamp>#<ulid>` | counts added/duplicate/failed, status, filename, `accountLabel` (owner-confirmed at upload, ADR-013) |
@@ -501,7 +501,7 @@ Browser → Cognito Hosted UI (Authorization Code + PKCE) → redirect with code
 
 - **AWS services use no secrets.** Bedrock/DynamoDB/S3/SQS all use IAM roles (ADR-008);
   Cognito client ID and API URL are public-by-design SPA config.
-- **Plaid is the one exception (ADR-014, `dev` only), and it follows the standing rule below.**
+- **Plaid is the one exception (ADR-014; both stages since ADR-016), and it follows the standing rule below.**
   Two Secrets Manager secrets: `ledgerly/<stage>/plaid/api-keys` (`{"client_id", "secret"}`) is
   created and filled in **by the owner by hand** — the stack only references it by name, so the
   value never passes through CDK, CloudFormation, the repo or CI; and
@@ -630,3 +630,5 @@ resolves it.)*
 | 1.6 | 2026-08-07 | Slice-6 budgets & dashboard **implemented** as designed (§2.2 AP 4/5/15, §3.3) — no change to the data model: budgets still key `BUDGET#<cycleId>#<categoryId>`, cycle-major. Two §2.5 route-shape notes: (1) the API addresses a cycle by `current` or an **ISO date inside it** (`{cycleRef}`), never the raw cycle ID, because the ID's `#` would have to survive URL encoding and a mis-encoded ID would silently address a nonexistent cycle — the server derives the canonical ID from the cadence history; (2) new `POST /transactions/recategorize` re-drives categorization over a window ([B-7]), the path that never existed because the importer only enqueues newly-added rows. §3.3 gains the aggregation semantics (spend = negated net so refunds net down; a synthetic Uncategorized row so unfiled money can't vanish; `remaining` counts only budgeted categories; `truncated` when the single-page read hits its cap). AP 15 corrected: the picker needs one `Limit=1` Query for the earliest transaction, not settings alone. |
 | 1.7 | 2026-11-15 | Slice-9 Plaid Sandbox ingest **backend implemented** per ADR-014 (`dev` only; `prod` synthesizes with no Plaid resources). §0/§4.3: "no runtime secrets" replaced — two Secrets Manager secrets for Plaid (owner-created API keys, stack-created access tokens). New `PlaidConstruct` (`api_plaid` + async `plaid_sync` worker), routes `POST /plaid/link-token` / `/plaid/exchange` / `/plaid/sync`, items `PLAIDITEM#<itemId>` and pointer `PLAIDTXN#<transaction_id>`; Plaid rows are ordinary `TXN#` items (`txnId` = Plaid's `transaction_id`, `pending` flag, no `balanceCents`). Diagram re-rendered (Plaid + Secrets Manager; Bedrock label corrected to Sonnet 4.6). §1.2/§1.3/§2.4/§2.5 prose still to be brought current at slice wrap. |
 | 1.8 | 2026-11-16 | Slice 9 complete: §1.2/§1.3/§2.4/§2.5 brought current for Plaid (Sandbox, `dev` only). New routes `GET /plaid/items`, `DELETE /plaid/items/{itemId}` and update-mode `POST /plaid/link-token {itemId}` (owner-confirmed paths); `PLAIDITEM#`/`PLAIDTXN#` items documented; `accountType` on Plaid rows with `loan` rows excluded from the dashboard (ADR-015); Sandbox data under a separate dev-only Cognito user (ADR-015). §1.2 Bedrock model corrected to Sonnet 4.6. No system-shape change, so no diagram re-render. |
+| 1.9 | 2026-11-26 | Slice 10 (ADR-016, Proposed): prod on Plaid Production, dev stays on Sandbox; OAuth return at `/oauth/plaid`; `LOCK#plaid-access-tokens` lease item outside every user partition; MFA required; CloudFront CSP + security headers. Diagram re-rendered (Plaid label). |
+| 1.10 | 2026-11-26 | Slice 10 (ADR-017, Proposed): category items gain `kind` (`spend` default, `transfer` for the system Transfers category, id `transfers`); the categorizer files Plaid-labelled own-account moves there before rules and the model; the cycle summary leaves transfers out and reports `totals.transferCount`. No system-shape change, so no diagram re-render. |

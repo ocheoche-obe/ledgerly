@@ -60,6 +60,8 @@ Superseded.
 | ADR-013 | Per-file account identity supplied (and confirmed) at upload time | Accepted |
 | ADR-014 | Plaid becomes the primary ingest source (Sandbox only for now) | Accepted |
 | ADR-015 | Loan accounts stay out of spend; Plaid Sandbox data lives under its own user | Accepted |
+| ADR-016 | Plaid Production on prod, on Plaid's free trial | **Proposed** (awaiting owner) |
+| ADR-017 | Transfers between own accounts, from Plaid's own label | **Proposed** (awaiting owner) |
 
 ---
 
@@ -931,4 +933,127 @@ The first live Plaid Sandbox sync surfaced two problems ADR-014 had not decided.
 
 ---
 
+## ADR-016: Plaid Production on prod, on Plaid's free trial
+
+**Status:** Proposed (2026-11-26, Slice 10). Becomes Accepted on the owner's word; nothing here is
+deployed to prod before that.
+
+### Context
+
+The owner wants to manage real money in Ledgerly, which means linking real banks (Chase first).
+ADR-014 kept Plaid on Sandbox and dev only, and said **no Production Item may be created until a
+follow-up ADR records verified Plaid pricing against the $10/month ceiling (NFR-1.1)**. This is
+that ADR.
+
+Pricing, as the owner's Plaid Dashboard showed on 2026-11-26: the team is on Plaid's **free trial**,
+"up to 10 connections", 0 of 10 used, Production keys issued, and "No action is needed to access
+banks through Plaid's free trial". A connection is a Plaid Item (one bank login). Plaid's docs say
+an Item removed with `/item/remove` **still counts** against the trial limit, and linking the same
+bank twice uses two. Chase is an OAuth institution; on the trial it needs no extra registration.
+
+dev cannot hold the real data: it is disposable by design (`retain_data=False`). prod is the
+stage with retained data, deletion protection and a manual deploy gate.
+
+### Decision
+
+1. **prod talks to Plaid Production; dev stays on Sandbox.** `StageConfig.plaid_env` is
+   `"production"` on prod, `"sandbox"` on dev, and `infra/check_plaid_environments.py` fails CI
+   if any Lambda, secret name or host in either template points at the other environment. The
+   backend accepts only those two values, and the Sandbox-only test calls refuse to run on a
+   Production client.
+2. **The free trial is the plan: up to 10 Items, $0.** That is the owner plus a few friends.
+   Going past 10, or a trial that ends, needs a paid Plaid plan and a revision of NFR-1.1 first.
+   Because a removed Item still uses a slot, the app warns before Disconnect, and re-linking is
+   avoided where Reconnect (update mode) fixes the login.
+3. **Bank OAuth return.** Link tokens carry `redirect_uri = {prod site}/oauth/plaid` (prod only,
+   `plaid_oauth_redirect`), which the owner registers in the Plaid Dashboard. Desktop uses
+   Plaid's popup and never needs it; a phone may leave the page for the bank and come back there,
+   where the SPA reopens the same Link session with `receivedRedirectUri`. The Link token is kept
+   in localStorage for that round trip only (cleared when Link finishes, ignored after an hour).
+4. **Two years of history** (`transactions.days_requested = 730`) on every new Item. It is fixed
+   when the Item is created, so it has to be right the first time.
+5. **MFA is required** in both user pools (TOTP), since the app now holds live bank access.
+6. **A Content-Security-Policy and security headers** on CloudFront (HSTS, nosniff, DENY framing,
+   strict-origin referrer), allowing only this app, Cognito, the stage's API and upload hosts and,
+   where Plaid is configured, Plaid Link's documented hosts.
+7. **The access-token write race ([B-11]) is fixed** with a short DynamoDB lease
+   (`adapters/locks.py`) around each read-modify-write of the tokens secret, since Secrets
+   Manager has no compare-and-swap. A writer that waits more than 6 seconds gets a retryable 503;
+   a crashed holder's lease expires after 20. A bank link waits twice, because its public token
+   is already spent; if both waits fail it removes the new Item at Plaid rather than leave a
+   live connection with no stored token (the slot is still used, per point 2).
+
+### Alternatives considered
+
+- **A paid plan now.** Rejected: nothing needs more than 10 Items yet, and per-Item monthly fees
+  would take most of the ceiling.
+- **Production on dev.** Rejected: dev's table is deleted with its stack, and real bank data does
+  not belong next to Sandbox test users.
+- **One secret per Item** instead of the lease. Rejected for now: $0.40/month per bank, and the
+  IAM grant could no longer name one secret. The lease costs nothing.
+- **CSP in Report-Only first.** Rejected: dev deploys first on merge and is checked in a browser
+  before the owner approves prod, which is the same safety for less work.
+
+### Consequences
+
+- Real transaction data now leaves AWS to `production.plaid.com` (NFR-4.6, already accepted in
+  principle by ADR-014). The owner's Production keys live in `ledgerly/prod/plaid/api-keys`,
+  created by the owner by hand; the stack still only references it by name.
+- prod gains the Plaid Lambdas and two secrets (about $0.80/month), so steady state is about
+  $3-6/month, inside the ceiling.
+- The same real transaction imported by CSV and synced by Plaid would count twice (ADR-014's open
+  item). prod has no CSV history today, so the rule is: on prod, use Plaid for an account and do
+  not CSV-import overlapping dates for it. A cutover date per account is the fix if that changes.
+- Signing in now needs an authenticator app; the first sign-in after deploy asks to set one up.
+- Transfers between own accounts still count as spend until the Transfer category lands (next PR).
+
+---
+
 <!-- Copy the ADR block above for each new decision. Keep them append-only. -->
+
+
+## ADR-017: Transfers between own accounts, from Plaid's own label
+
+**Status:** Proposed (2026-11-26, Slice 10). Becomes Accepted on the owner's word.
+
+### Context
+
+Paying a credit card from checking, or moving money to savings, is not spending, but it lands
+in Ledgerly as two ordinary transactions and both were counted in the dashboard (backlog [B-11],
+deferred to Slice 7 by ADR-015). With real accounts on Plaid Production (ADR-016) that would
+double-count every card bill. Plaid already labels each transaction with
+`personal_finance_category` (`primary`, `detailed`, `confidence_level`), and the sync worker
+keeps that in the row's `raw` copy.
+
+### Decision
+
+1. **A system Transfers category**, id `transfers`, `kind: "transfer"`, created per user the first
+   time one of their rows needs it (a conditional put, so it is never duplicated). It is a normal
+   category the owner can rename or archive. Archived means "stop filing there": new rows go
+   through the usual rules and model instead.
+2. **Only Plaid's own label files a row there**, before merchant rules and the model, with no
+   model call: `detailed` is one of `TRANSFER_IN/OUT_ACCOUNT_TRANSFER`,
+   `TRANSFER_IN/OUT_SAVINGS` or `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`, **and** `confidence_level`
+   is `HIGH` or `VERY_HIGH`, **and** no counterparty is a `payment_app` (Venmo, Zelle and the
+   like are often a person, so they stay with the model). The model is never offered Transfers,
+   so it cannot file a guess there.
+3. **The dashboard leaves Transfers out**: no row, no budget (the API refuses one), not in the
+   totals; it shows only how many transfers were set aside, so nothing vanishes silently.
+4. **CSV rows are unchanged**: they carry no Plaid label, and the owner's real data is moving to
+   Plaid. Investment contributions keep the existing "Savings & Investments" category.
+
+### Alternatives considered
+
+- **Let the model choose Transfers.** Rejected: a wrong guess hides real spending from every
+  total, and Plaid's label is free and better informed (it sees both sides).
+- **Match the two legs of a transfer ourselves** (same amount, opposite sign, close dates).
+  Deferred: needs both accounts linked and a matching window; Plaid's label already covers the
+  common cases.
+- **Include person-to-person apps.** Rejected for now: paying a friend back for dinner is spending.
+
+### Consequences
+
+- Card payments and savings moves stop inflating spend on Plaid-linked accounts.
+- A row Plaid labels wrongly, or at `MEDIUM` confidence, is still categorized by the model, and
+  the owner can correct it once the review queue lands (Slice 7).
+- Revisit if Plaid changes its taxonomy, or if CSV accounts come back into regular use.

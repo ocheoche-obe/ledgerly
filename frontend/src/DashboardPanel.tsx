@@ -183,6 +183,15 @@ export function DashboardPanel({
             </p>
           )}
 
+          {(totals.transferCount ?? 0) > 0 && (
+            <p className="ldg-note">
+              {totals.transferCount} transfer
+              {totals.transferCount === 1 ? " isn't" : "s aren't"} counted here: card payments and
+              moves to savings shift money between your own accounts. They're listed under{" "}
+              <strong>Transfers</strong> in your transactions.
+            </p>
+          )}
+
           {totals.uncategorizedCount > 0 && (
             <p className="ldg-note">
               {totals.uncategorizedCount} transaction

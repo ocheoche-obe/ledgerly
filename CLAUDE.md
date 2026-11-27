@@ -56,12 +56,12 @@ _Approved 2026-07-13 (architecture doc v1.1; ADR-001…009 all Accepted):_
 - **AI pipeline:** SQS + DLQ (ADR-009) → categorizer Lambda → merchant rules first, then
   Claude Sonnet 4.6 via Amazon Bedrock with structured output (ADR-008 as amended). AWS services
   are all IAM-role auth; **the only runtime secrets are Plaid's** (below).
-- **Plaid ingest (ADR-014, `dev` stage only, Sandbox only):** `POST /plaid/link-token` ·
+- **Plaid ingest (ADR-014; dev = Sandbox, prod = Production on the free trial, ADR-016):** `POST /plaid/link-token` ·
   `/plaid/exchange` · `/plaid/sync` → `api_plaid` Lambda → async `plaid_sync` worker →
   ordinary `TXN#` items + the same categorization queue. Secrets Manager holds
-  `ledgerly/dev/plaid/api-keys` (owner-created by hand, referenced by name only) and
-  `ledgerly/dev/plaid/access-tokens` (stack-created, written by `api_plaid`). `prod` synthesizes
-  with no Plaid resources.
+  `ledgerly/<stage>/plaid/api-keys` (owner-created by hand, referenced by name only) and
+  `ledgerly/<stage>/plaid/access-tokens` (stack-created, written by `api_plaid` under a DynamoDB
+  lease). `infra/check_plaid_environments.py` proves each stage reaches only its own Plaid host.
 - **Key data-model idea:** everything keyed by user + budget cycle (`M#2026-07` /
   `B#2026-07-10`); cycle windows derived from settings, so cadence changes never rewrite
   history. Diagram: `docs/ledgerly-architecture-diagram.png` (regenerate via
@@ -210,7 +210,8 @@ _Seeded in Slice 1 (walking skeleton); grows per slice._
   for a cycle + totals band + cycle picker + inline budget editing, styled via
   `dashboardStyles.ts` — a **real stylesheet**, not inline styles, because the layout needs media
   queries (FR-5.4) and `:hover`/`:focus`; the other panels keep inline styles until [B-3];
-  **`BankConnectionsPanel`** (Slice 9, `dev` only — hides itself on a 404) = Plaid Link connect,
+  **`BankConnectionsPanel`** (Slice 9; hides itself on a 404) = Plaid Link connect (+ the
+  `/oauth/plaid` bank-sign-in return, `plaidOAuth.ts`),
   Sync now, Reconnect (update mode, one keyed `usePlaidLink` per token), Disconnect;
   `ImportPanel` = CSV upload (presign → PUT to S3 → poll import report) +
   recent imports; `TransactionsPanel` = date-window transaction table with a **Category** column that reflects
@@ -297,6 +298,9 @@ _Solidified at the end of Slice 1. Binding:_
 
 ## Current build phase
 
+**Slice 10 — Plaid Production on prod (free trial, ADR-016 Proposed): 🔨 IN PROGRESS (2026-11-26).**
+PR open; accepting ADR-016, the prod key, the Plaid redirect URI and the prod deploy are the owner's.
+
 **Slice 9 — Plaid Sandbox ingest: ✅ COMPLETE (2026-11-16)** — #61 (backend) + #62 (Bank
 connections UI). Verified live on `dev` through the real UI (Playwright) as the **dev-only Cognito
 Sandbox user** (`…+sandbox@gmail.com`, `PlaidSandboxUser`); Plaid build-kit acceptance PASS
@@ -310,7 +314,7 @@ Worth knowing before touching Plaid code:
   partition** (convention, not enforced — [B-11]); `backend/ops/purge_plaid_sandbox.py` cleans
   the owner's partition if it happens (dry run first; execution needs the printed fingerprint).
 - Routes (owner-confirmed): `POST /plaid/link-token` (`{itemId}` → update mode), `/plaid/exchange`,
-  `/plaid/sync`, `GET /plaid/items`, `DELETE /plaid/items/{itemId}` — `dev` only.
+  `/plaid/sync`, `GET /plaid/items`, `DELETE /plaid/items/{itemId}` — both stages (ADR-016).
 - **Deploying `dev` from a branch:** an exact-match allow rule lets Claude run `npx --yes
   aws-cdk@2.1148.1 deploy Ledgerly-dev --profile ledgerly-dev --require-approval never`; show the
   `cdk diff` in chat first. [B-10] replaces this with a dispatchable GitHub Action.

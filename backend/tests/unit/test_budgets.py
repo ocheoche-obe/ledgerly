@@ -191,7 +191,7 @@ def test_empty_cycle_produces_zero_totals_not_an_error():
         "moneyInCents": 0, "moneyOutCents": 0, "netCents": 0, "budgetedCents": 0,
         "spentAgainstBudgetCents": 0, "remainingCents": 0,
         "transactionCount": 0, "uncategorizedCount": 0,
-        "pendingSpentCents": 0, "pendingCount": 0, "excludedCount": 0,
+        "pendingSpentCents": 0, "pendingCount": 0, "excludedCount": 0, "transferCount": 0,
     }
     assert result["cycle"] == CYCLE
 
@@ -227,3 +227,34 @@ def test_exclusion_follows_the_account_type_not_the_label():
     )
     assert result["totals"]["transactionCount"] == 2
     assert result["totals"]["excludedCount"] == 0
+
+
+# --- transfers between own accounts (ADR-017) --------------------------------------------
+
+TRANSFERS = {"categoryId": "transfers", "name": "Transfers", "status": "active",
+             "sortOrder": 10_000, "kind": "transfer"}
+
+
+def test_transfers_are_left_out_of_every_figure_and_counted_separately():
+    result = summarize(
+        cycle=CYCLE,
+        categories=CATEGORIES + [TRANSFERS],
+        # A budget on Transfers (from before it was refused) is ignored too.
+        budgets=[{"categoryId": GROC, "amountCents": 10000},
+                 {"categoryId": "transfers", "amountCents": 5000}],
+        transactions=[
+            _txn(-4000, GROC),
+            _txn(-90000, "transfers"),   # card payment out of checking
+            _txn(90000, "transfers"),    # the card's side of the same payment
+            _txn(250000, INCOME),
+        ],
+    )
+    rows = _rows(result)
+    assert "transfers" not in rows
+    totals = result["totals"]
+    assert totals["moneyOutCents"] == 4000
+    assert totals["moneyInCents"] == 250000
+    assert totals["budgetedCents"] == 10000
+    assert totals["remainingCents"] == 6000
+    assert totals["transactionCount"] == 2
+    assert totals["transferCount"] == 2

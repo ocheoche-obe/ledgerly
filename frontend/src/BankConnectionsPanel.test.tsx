@@ -86,8 +86,12 @@ beforeEach(() => {
   link.options = null;
   link.open.mockReset();
   link.openedTokens = [];
+  localStorage.clear();
+  window.history.replaceState({}, "", "/");
 });
 afterEach(cleanup);
+
+const SAVED_KEY = "ledgerly.plaidLinkSession";
 
 describe("BankConnectionsPanel", () => {
   it("lists connected institutions with accounts, balances and last sync", async () => {
@@ -106,6 +110,52 @@ describe("BankConnectionsPanel", () => {
     fireEvent.click(button);
     expect(link.open).toHaveBeenCalledOnce();
     expect(link.openedTokens).toEqual(["link-new-token"]);
+  });
+
+  it("remembers the Link session before opening, for a bank sign-in that leaves the page", async () => {
+    render(<BankConnectionsPanel api={fakeApi()} onChanged={vi.fn()} onError={vi.fn()} />);
+    await waitFor(() => expect(link.options?.token).toBe("link-new-token"));
+    const button = screen.getByRole("button", { name: "Connect bank" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    const saved = JSON.parse(localStorage.getItem(SAVED_KEY) ?? "null");
+    expect(saved).toMatchObject({ token: "link-new-token", mode: { mode: "link" } });
+  });
+
+  it("resumes the same Link session when the bank sends the owner back, then cleans up", async () => {
+    localStorage.setItem(SAVED_KEY, JSON.stringify({
+      token: "link-new-token", mode: { mode: "link" }, savedAt: Date.now(),
+    }));
+    window.history.replaceState({}, "", "/oauth/plaid?oauth_state_id=state-1");
+    const api = fakeApi();
+    render(<BankConnectionsPanel api={api} onChanged={vi.fn()} onError={vi.fn()} />);
+
+    // Same token, the full return URL, and opened without a click.
+    await waitFor(() => expect(link.open).toHaveBeenCalledOnce());
+    expect(link.openedTokens).toEqual(["link-new-token"]);
+    expect(link.options?.receivedRedirectUri).toBe(
+      "http://localhost:3000/oauth/plaid?oauth_state_id=state-1",
+    );
+    expect(api.createLinkToken).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await link.options!.onSuccess("public-production-abc", SUCCESS_META);
+    });
+    expect(api.exchangePublicToken).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(SAVED_KEY)).toBeNull();
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("ignores a return URL with no remembered session, or one over an hour old", async () => {
+    window.history.replaceState({}, "", "/oauth/plaid?oauth_state_id=state-1");
+    localStorage.setItem(SAVED_KEY, JSON.stringify({
+      token: "stale-token", mode: { mode: "link" }, savedAt: Date.now() - 2 * 60 * 60 * 1000,
+    }));
+    const api = fakeApi();
+    render(<BankConnectionsPanel api={api} onChanged={vi.fn()} onError={vi.fn()} />);
+    await waitFor(() => expect(link.options?.token).toBe("link-new-token"));
+    expect(link.options?.receivedRedirectUri).toBeUndefined();
+    expect(link.open).not.toHaveBeenCalled();
   });
 
   it("exchanges the public token with Link's metadata, then reports the first sync", async () => {

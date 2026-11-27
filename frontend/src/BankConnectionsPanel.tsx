@@ -13,9 +13,10 @@ import {
   type BankConnection,
   type ImportSummary,
 } from "./api";
+import { finishOAuthReturn, oauthReturn, rememberLinkSession } from "./plaidOAuth";
 import { styles } from "./styles";
 
-// Bank connections (Slice 9, ADR-014 — Plaid Sandbox, dev stage only).
+// Bank connections (Slice 9, ADR-014: Plaid Sandbox on dev; ADR-016: Plaid Production on prod).
 //
 // Connect: the server mints a Link token → Plaid Link opens in the page → Link hands back a
 // one-time public token → the server exchanges it for an access token it keeps to itself and
@@ -27,8 +28,11 @@ import { styles } from "./styles";
 // nothing is exchanged — the existing connection simply works again, and a sync confirms it.
 //
 // Disconnect: the server ends the connection at Plaid (not just in our table — a connection
-// left live at Plaid keeps existing and, in Production, keeps being billed). Transactions
-// already synced stay, because they are spending history.
+// left live at Plaid keeps existing). Transactions already synced stay, because they are
+// spending history. On Plaid's free trial a removed connection does not give its slot back.
+//
+// A bank that signs the owner in on its own site (OAuth, e.g. Chase) may send the whole page
+// away and back to /oauth/plaid; the panel then resumes the same Link session (plaidOAuth.ts).
 
 // Pending categorization runs behind SQS after a sync; re-read the dashboard after these
 // delays so freshly synced rows show up categorized without a manual refresh.
@@ -41,6 +45,8 @@ type LinkMode = { mode: "link" } | { mode: "update"; itemId: string };
 interface LinkSessionState {
   token: string;
   mode: LinkMode;
+  // Set only when resuming after a bank's full-page sign-in: Link reopens on its own.
+  receivedRedirectUri?: string;
 }
 
 interface SyncOutcome {
@@ -99,7 +105,12 @@ export function BankConnectionsPanel({
 
   useEffect(() => {
     refresh();
-    prepareNewLink();
+    const resumed = oauthReturn();
+    if (resumed) {
+      setSession(resumed);
+    } else {
+      prepareNewLink();
+    }
   }, [refresh, prepareNewLink]);
 
   const reloadAfterCategorizing = useCallback(() => {
@@ -141,6 +152,7 @@ export function BankConnectionsPanel({
 
   const onSuccess = useCallback(
     async (mode: LinkMode, publicToken: string | null, metadata: PlaidLinkOnSuccessMetadata) => {
+      finishOAuthReturn();
       setNotice(null);
       if (mode.mode === "update") {
         // Update mode returns no public token and needs no exchange: the login is repaired
@@ -186,7 +198,13 @@ export function BankConnectionsPanel({
   );
 
   const onExit = useCallback(
-    (mode: LinkMode, error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
+    (
+      mode: LinkMode,
+      error: PlaidLinkError | null,
+      metadata: PlaidLinkOnExitMetadata,
+      resumed: boolean,
+    ) => {
+      finishOAuthReturn();
       if (error) {
         // display_message is written for end users when present; otherwise use our own copy.
         // The session ID is what Plaid support needs to investigate.
@@ -197,7 +215,8 @@ export function BankConnectionsPanel({
         );
       }
       // A plain close (no error) is the owner changing their mind: nothing to report.
-      if (mode.mode === "update" || error?.error_code === "INVALID_LINK_TOKEN") {
+      // A resumed session has no Connect button of its own, so mint a fresh one either way.
+      if (mode.mode === "update" || resumed || error?.error_code === "INVALID_LINK_TOKEN") {
         prepareNewLink();
       }
     },
@@ -220,7 +239,8 @@ export function BankConnectionsPanel({
     const ok = window.confirm(
       `Disconnect ${c.institutionName || "this bank"}?\n\n` +
         "Ledgerly stops syncing it and the connection is ended at Plaid. " +
-        "Transactions already imported stay in Ledgerly.",
+        "Transactions already imported stay in Ledgerly. On Plaid's free trial, " +
+        "connecting it again uses up another of your 10 connections.",
     );
     if (!ok) return;
     setBusy("Disconnecting…");
@@ -259,11 +279,13 @@ export function BankConnectionsPanel({
           <LinkSession
             key={session.token}
             token={session.token}
-            autoOpen={session.mode.mode === "update"}
-            showConnect={session.mode.mode === "link"}
+            mode={session.mode}
+            receivedRedirectUri={session.receivedRedirectUri}
+            autoOpen={session.mode.mode === "update" || session.receivedRedirectUri !== undefined}
+            showConnect={session.mode.mode === "link" && session.receivedRedirectUri === undefined}
             disabled={busy !== null}
             onSuccess={(t, m) => onSuccess(session.mode, t, m)}
-            onExit={(e, m) => onExit(session.mode, e, m)}
+            onExit={(e, m) => onExit(session.mode, e, m, session.receivedRedirectUri !== undefined)}
           />
         ) : (
           <button style={styles.button} disabled>
@@ -352,6 +374,8 @@ export function BankConnectionsPanel({
 // One Plaid Link session. Mounted per token (see the key above), so its `ready` is this token's.
 function LinkSession({
   token,
+  mode,
+  receivedRedirectUri,
   autoOpen,
   showConnect,
   disabled,
@@ -359,21 +383,36 @@ function LinkSession({
   onExit,
 }: {
   token: string;
-  autoOpen: boolean; // update mode: open as soon as ready (the Reconnect click was the gesture)
+  mode: LinkMode;
+  receivedRedirectUri?: string;
+  // Open as soon as ready: update mode (the Reconnect click was the gesture) and a session
+  // resumed after a bank's own sign-in page.
+  autoOpen: boolean;
   showConnect: boolean;
   disabled: boolean;
   onSuccess: (publicToken: string | null, metadata: PlaidLinkOnSuccessMetadata) => void;
   onExit: (error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => void;
 }) {
-  const { open, ready } = usePlaidLink({ token, onSuccess, onExit });
+  const { open, ready } = usePlaidLink({
+    token,
+    onSuccess,
+    onExit,
+    ...(receivedRedirectUri ? { receivedRedirectUri } : {}),
+  });
   const opened = useRef(false);
+
+  // Kept before every open, so a bank sign-in that leaves the page can come back to it.
+  const start = useCallback(() => {
+    if (!receivedRedirectUri) rememberLinkSession(token, mode);
+    open();
+  }, [token, mode, receivedRedirectUri, open]);
 
   useEffect(() => {
     if (autoOpen && ready && !opened.current) {
       opened.current = true;
-      open();
+      start();
     }
-  }, [autoOpen, ready, open]);
+  }, [autoOpen, ready, start]);
 
   if (!showConnect) {
     return (
@@ -383,7 +422,7 @@ function LinkSession({
     );
   }
   return (
-    <button style={styles.button} onClick={() => open()} disabled={!ready || disabled}>
+    <button style={styles.button} onClick={start} disabled={!ready || disabled}>
       Connect bank
     </button>
   );

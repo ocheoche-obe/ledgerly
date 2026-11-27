@@ -33,6 +33,7 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.8
 
 SOURCE_RULE = "rule"
 SOURCE_LLM = "llm"
+SOURCE_PLAID = "plaid"  # Plaid's own label said "transfer between own accounts" (ADR-017)
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,18 @@ def decide_rule_hit(category_id: str) -> Decision:
         needs_review=False,
         confidence=1.0,
         source=SOURCE_RULE,
+    )
+
+
+def decide_transfer(category_id: str) -> Decision:
+    """A row Plaid labels as a move between the owner's accounts (``core.transfers``):
+    filed straight to the Transfers category, no model call, no review."""
+    return Decision(
+        category_id=category_id,
+        status=STATUS_AUTO,
+        needs_review=False,
+        confidence=1.0,
+        source=SOURCE_PLAID,
     )
 
 

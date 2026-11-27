@@ -1,7 +1,7 @@
 # Ledgerly — Build-Time Backlog
 
 **Status:** Living document — append as things are noticed; triage as slices are planned
-**Version:** 0.5
+**Version:** 0.7
 **Created:** 2026-07-21
 
 ---
@@ -387,7 +387,7 @@ or Slice 7 where noted. None is a security issue (the security review found none
 | Finding | Why deferred | Likely fix |
 |---|---|---|
 | Nothing stops the owner linking a **Sandbox** bank while signed in as themselves (ADR-015's separation is a convention) | Needs an owner decision: enforce by user, or keep as convention while Plaid is Sandbox-only | Allow `/plaid/*` only for an allow-listed sub in `dev`, or a visible "Sandbox" warning on the owner's account |
-| The access-tokens secret is one JSON document with an unlocked read-modify-write; a concurrent connect + disconnect could drop a token | Single user; both actions are manual and seconds apart | One secret per Item, or a version-checked write |
+| ~~The access-tokens secret is one JSON document with an unlocked read-modify-write; a concurrent connect + disconnect could drop a token~~ | **Fixed in Slice 10** (ADR-016): a DynamoDB lease around each write | — |
 | Every non-retryable Plaid error is recorded on the connection, including an exhausted mutation-during-pagination restart, and a slow failing sync can overwrite a newer success's error-clear | Self-heals on the next good sync; no data is wrong | Treat restart exhaustion as transient; condition the error write on `lastSyncedAt` |
 | Purge script: sync records of a Sandbox connection with **no** surviving rows are reported, not deleted | Never happened in the real run (all 3 matched); the rule errs toward keeping data | Also select `IMPORT#` by `plaidEnv`-tagged connection IDs once imports carry `plaidEnv` |
 | `react-plaid-link` binds `onSuccess`/`onExit` when the handler is created, so they see that render's state | One handler per token (keyed session) keeps the window short; nothing reads stale state today | Route callbacks through a ref |
@@ -395,7 +395,7 @@ or Slice 7 where noted. None is a security issue (the security review found none
 | Link exit metadata (`link_session_id`, error) is shown, not stored server-side | Connect funnel is one person | A small `POST /plaid/link-events` |
 | Loan-account rows are still sent to the categorizer, though the dashboard excludes them (final `/review-pr` nit) | About a cent of Bedrock per sync; the transaction list still shows those rows with a category | Skip the enqueue for `excluded_from_spend` rows, or give them a fixed "Loan" label |
 | If Plaid's Link script never loads during a Reconnect session, Connect bank stays disabled until a page reload (final `/review-pr` nit) | Recovery is a reload; no data at risk | A timeout that drops the update-mode session and restores the new-connection one |
-| Transfers between own accounts (card payment, CD deposit) count as spend | Owner-deferred to Slice 7 (ADR-015) | Transfer category; Plaid's `personal_finance_category` as an input |
+| ~~Transfers between own accounts (card payment, CD deposit) count as spend~~ | **Fixed in Slice 10** for Plaid rows (ADR-017): Plaid's own label files them under Transfers, left out of the dashboard | CSV rows unchanged |
 
 **Refs:** PR #62; ADR-014; ADR-015; `PLAID_PLAN.md` acceptance round 1.
 
@@ -406,6 +406,8 @@ or Slice 7 where noted. None is a security issue (the security review found none
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-07-21 | Backlog doc created (seeded B-1 account picker, B-2 txn pagination/window, B-3 frontend visual pass). Boundary vs. the plan's post-MVP parking lot + the triage flow defined. |
+| 0.7 | 2026-11-26 | [B-11] own-account transfers fixed for Plaid rows (Slice 10, ADR-017). |
+| 0.6 | 2026-11-26 | [B-11] token-secret race fixed (Slice 10, ADR-016). |
 | 0.5 | 2026-11-16 | [B-11] added: Slice 9 review findings deliberately deferred (none security), each with its reason and likely fix. |
 | 0.4 | 2026-11-15 | [B-10] added (Slice 9): no way to deploy a PR branch to dev except a workstation `cdk deploy`; proposed `workflow_dispatch` dev deploy on the existing OIDC role, after which the local allow rule goes. |
 | 0.3 | 2026-08-07 | [B-9] added from a red CI on PR #44: both venvs were installed *below their own manifests' floors* (ruff 0.15.21 vs `>=0.16.0`; aws-cdk-lib 2.261.0 vs `>=2.262.2`), so the local lint gate passed on code CI rejected. |

@@ -1,4 +1,4 @@
-"""/plaid — connect a bank through Plaid and start syncs (ADR-014). Sandbox only.
+"""/plaid — connect a bank through Plaid and start syncs (ADR-014; Production on prod, ADR-016).
 
 Thin handler (architecture §5.2): identity from verified JWT claims only (FR-1.3).
 
@@ -49,6 +49,7 @@ from adapters.lambda_invoke import start_plaid_sync
 from adapters.plaid import PlaidClient, PlaidConfigError, PlaidError
 from adapters.secrets import (
     SecretConfigError,
+    TokenStoreBusy,
     delete_access_token,
     get_access_token,
     get_plaid_credentials,
@@ -130,6 +131,10 @@ def handler(event: dict, context) -> dict:
     except SecretConfigError as err:
         logger.error(json.dumps({"route": route, "sub": sub, "err": str(err)}))
         return _response(503, {"message": "Bank connections are not configured."})
+    except TokenStoreBusy:
+        logger.warning(json.dumps({"route": route, "sub": sub, "outcome": "token_store_busy"}))
+        return _response(503, {"message": "Another bank change is in progress. Try again in "
+                                          "a few seconds."})
 
 
 # --- routes -----------------------------------------------------------------------------
@@ -151,8 +156,12 @@ def _link_token(sub: str, body: dict) -> dict:
             return _response(409, {"message": "this connection has no stored access; "
                                               "disconnect it and connect the bank again"})
 
-    # The Cognito sub is the stable, non-personal user ID Plaid asks for.
-    result = _client().link_token_create(client_user_id=sub, access_token=access_token)
+    # The Cognito sub is the stable, non-personal user ID Plaid asks for. The OAuth redirect
+    # is configured per stage and must match a URI registered in the Plaid Dashboard.
+    result = _client().link_token_create(
+        client_user_id=sub, access_token=access_token,
+        redirect_uri=os.environ.get("PLAID_REDIRECT_URI") or None,
+    )
     logger.info(json.dumps({
         "route": "POST /plaid/link-token", "sub": sub, "mode": "update" if item_id else "link",
         "itemId": item_id or "", "plaidRequestId": result.get("request_id", ""),
@@ -230,6 +239,17 @@ def _exchange(sub: str, body: dict) -> dict:
     return _response(201, result)
 
 
+def _remove_unstored_item(client, sub: str, item_id: str, access_token: str) -> None:
+    """Best-effort ``/item/remove`` for an Item whose access token could not be stored."""
+    try:
+        client.item_remove(access_token=access_token)
+        outcome = "unstored_item_removed"
+    except Exception:  # noqa: BLE001 - best effort on a path that is already failing
+        outcome = "unstored_item_remove_failed"
+    logger.error(json.dumps({"route": "POST /plaid/exchange", "sub": sub,
+                             "itemId": item_id, "outcome": outcome}))
+
+
 def _link(sub: str, *, public_token: str, institution_id: str, institution_name: str,
           link_session_id: str) -> dict:
     """Exchange a public token, persist the result, and start the first sync.
@@ -248,7 +268,21 @@ def _link(sub: str, *, public_token: str, institution_id: str, institution_name:
     exchanged = client.item_public_token_exchange(public_token=public_token)
     item_id = exchanged["item_id"]
     access_token = exchanged["access_token"]
-    store_access_token(sub, item_id, access_token)
+    try:
+        store_access_token(sub, item_id, access_token)
+    except TokenStoreBusy:
+        # The public token is spent, so this is the one write that must not be given up on
+        # lightly: wait once more for the lease (still inside the Lambda's timeout).
+        logger.warning(json.dumps({"route": "POST /plaid/exchange", "sub": sub,
+                                   "itemId": item_id, "outcome": "token_store_busy_retry"}))
+        try:
+            store_access_token(sub, item_id, access_token)
+        except TokenStoreBusy:
+            # Still busy (a crashed earlier writer can hold the lease for its full 20 s). The
+            # token exists only in memory now, so remove the Item at Plaid rather than leave a
+            # live connection nobody can reach or disconnect. Connecting again then starts clean.
+            _remove_unstored_item(client, sub, item_id, access_token)
+            raise
 
     record = new_plaid_item(
         item_id,

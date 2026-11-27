@@ -120,8 +120,12 @@ def _set_budget(sub: str, cycle_ref: str, category_id: str, body: dict) -> dict:
     # Budgets key off a category id; an unknown one would write an orphan item that no
     # dashboard row ever reads. Archived categories are still writable — an archived category
     # can hold history for a cycle that was budgeted while it was live.
-    if category_id not in {c["categoryId"] for c in list_categories(sub)}:
+    category = next((c for c in list_categories(sub) if c["categoryId"] == category_id), None)
+    if category is None:
         raise ValueError("unknown categoryId")
+    if category.get("kind") == "transfer":
+        # Transfers are left out of spend (ADR-017), so a budget on them would never be read.
+        raise ValueError("Transfers can't have a budget: they aren't spending")
 
     if "amountCents" not in body:
         raise ValueError("amountCents is required (use null to clear the budget)")

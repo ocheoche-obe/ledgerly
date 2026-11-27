@@ -1,7 +1,7 @@
 # Ledgerly — Implementation Plan & Roadmap
 
 **Status:** Living document — the authoritative "what order, what's done, what's next"
-**Version:** 1.4
+**Version:** 1.6
 **Created:** 2026-07-12
 
 ---
@@ -83,6 +83,7 @@ whose findings loop back into new requirements, ADRs, or slices here.
 | 7 | Review queue, corrections & transaction management | FR-3.4, FR-6.1–6.3 | ⬜ | — |
 | 8 | v1 hardening + first real cycle | NFR-7.x, success criteria | ⬜ | — |
 | 9 | **Plaid Sandbox ingest** — runs next, *before* Slice 7 (owner reorder, 2026-11-14) | FR-2.3, NFR-4.3/4.5 | ✅ complete (2026-11-16) — verified live on dev through the real UI; Plaid acceptance PASS; ADR-014 + ADR-015 | [#61](https://github.com/ocheoche-obe/ledgerly/pull/61), [#62](https://github.com/ocheoche-obe/ledgerly/pull/62) |
+| 10 | **Plaid Production on prod** (free trial, ADR-016) + Transfer category | FR-2.3, NFR-1.1, NFR-4.x | 🔨 started 2026-11-26 — PR open; prod deploy and first real link are the owner's | — |
 
 > Slicing rationale: Slice 1 is the **thinnest end-to-end proof** that the whole stack
 > works deployed (the kit's rule) — thinner than the interview candidate ("CSV upload →
@@ -744,3 +745,5 @@ The dev table holds **153 uncategorized real transactions** (`chase-5980`: 59 in
 | 1.2 | 2026-08-07 | Slice 6 🔨 started. Dev-data survey at slice start found all real data sits in *past* cycles (59 June + 94 July, uncategorized) and dev's cadence is a stray biweekly from a Slice-3 smoke test → the current cycle is empty, making the FR-5.3 cycle picker load-bearing for verification. Four ⚠ decisions resolved with the owner: [B-7] recategorize = uncategorized-only with an `includeCategorized` opt-in; dev cadence reverted to monthly; a real design pass for the dashboard only ([B-3] still deferred); no ADR for the new route (architecture §2.5 route table updated instead). [B-6] (pin `infra/requirements.txt`) folded in — this is the next infra-touching slice. Exit criteria extended to cover budget editing, NFR-2.1 and NFR-7.1 |
 | 1.1 | 2026-07-21 | Slice 5 🔨 code-complete: async AI categorization (SQS+DLQ → categorizer → Bedrock Claude Opus 4.8) + eval harness, FR-3.1–3.3/3.5. `core/categorize/` decision matrix + `merchant_rules` + `bedrock`/`sqs` adapters + `CategorizationConstruct`; 164 backend/13 frontend tests. Threshold 0.8 (owner-approved); harness A/Bs Opus 4.8 vs Sonnet 5 (owner-agreed, 2026-07-21). ADR-008 impl notes added (boto3 not `anthropic` SDK; Opus 4.8 is INFERENCE_PROFILE-only → `us.anthropic.…` id + profile/FM IAM grant). Deploy + live smoke + eval baseline via pipeline on merge (Option A) — those exit criteria stay open until then; owner's labeled sample still needed for the baseline number |
 | 1.4 | 2026-11-16 | Slice 9 ✅ complete (#61 backend, #62 bank connections UI). Verified live on dev through the real UI as a dev-only Sandbox user; Plaid acceptance PASS. ADR-015 (loan accounts out of spend; Sandbox data under its own user); 701 Sandbox items purged from the owner's partition with the owner's approval. Merge cadence changed by the owner: a clean blind `/review-pr` + green CI merges without waiting (CLAUDE.md "Who merges"). Backlog [B-10] (dispatchable dev deploy), [B-11] (deferred review findings) |
+| 1.5 | 2026-11-26 | Slice 10 🔨 started: Plaid Production on prod on the free trial (ADR-016, Proposed): per-stage Plaid environment check, OAuth return page, 730 days of history, MFA required, CSP, [B-11] token race fixed. Transfer category follows in its own PR. |
+| 1.6 | 2026-11-26 | Slice 10: Transfer category from Plaid's own `personal_finance_category` label (ADR-017, Proposed); transfers left out of the dashboard. |
